@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://originguard.local/schemas/analysis-requested.schema.json",
+  "title": "AnalysisRequested",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["eventId", "eventType", "schemaVersion", "occurredAt", "tenantId", "assetId", "traceId"],
+  "properties": {
+    "eventId": { "type": "string", "minLength": 1 },
+    "eventType": { "const": "ANALYSIS_REQUESTED" },
+    "schemaVersion": { "const": "1.0" },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "tenantId": { "type": "string", "minLength": 1 },
+    "caseId": { "type": "string" },
+    "assetId": { "type": "string", "minLength": 1 },
+    "traceId": { "type": "string", "minLength": 1 }
+  }
+}
+

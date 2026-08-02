@@ -1,0 +1,10 @@
+originguard:
+  security:
+    jwt:
+      secret: ${ORIGINGUARD_JWT_SECRET:local-only-secret-change-before-production-32-bytes}
+      refresh-cookie-secure: false
+  bootstrap:
+    enabled: true
+    tenant-code: demo
+    tenant-name: OriginGuard Demo
+    password: ${ORIGINGUARD_DEMO_PASSWORD:OriginGuard@123}
