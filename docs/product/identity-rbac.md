@@ -56,3 +56,9 @@ auth_refresh_token
 - 管理员统计只包含当前租户；
 - 审核员具备复核和签署权限；
 - Refresh Token 轮换、旧 Token 失效、退出撤销。
+
+## 相关设计文档
+
+- [当前项目设计计划书](./OriginGuard_项目设计计划书.md)
+- [角色与权限规划](./OriginGuard_角色与权限规划.md)
+- [ADR-006：分离系统管理与案件审核职责](../adr/ADR-006-separate-administration-from-review.md)
