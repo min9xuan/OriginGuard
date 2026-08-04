@@ -1,14 +1,41 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import LoginView from '../views/LoginView.vue'
-import WorkspaceView from '../views/WorkspaceView.vue'
+import AppLayout from '../layouts/AppLayout.vue'
 
 const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: '/', redirect: '/workspace' },
     { path: '/login', component: LoginView, meta: { public: true } },
-    { path: '/workspace', component: WorkspaceView },
+    {
+      path: '/',
+      component: AppLayout,
+      children: [
+        { path: '', redirect: '/workspace' },
+        { path: 'workspace', component: () => import('../views/WorkspaceView.vue') },
+        {
+          path: 'assets',
+          component: () => import('../views/MediaAssetsView.vue'),
+          meta: { permissions: ['asset:read'] },
+        },
+        {
+          path: 'cases',
+          component: () => import('../views/CasesView.vue'),
+          meta: { permissions: ['case:read'] },
+        },
+        {
+          path: 'cases/new',
+          component: () => import('../views/CaseCreateView.vue'),
+          meta: { permissions: ['case:create'] },
+        },
+        {
+          path: 'cases/:caseId',
+          component: () => import('../views/CaseDetailView.vue'),
+          meta: { permissions: ['case:read'] },
+        },
+      ],
+    },
+    { path: '/:pathMatch(.*)*', redirect: '/workspace', meta: { fallback: true } },
   ],
 })
 
@@ -17,6 +44,8 @@ router.beforeEach(async (to) => {
   if (!auth.initialized) await auth.restoreSession()
   if (!to.meta.public && !auth.authenticated) return { path: '/login', query: { redirect: to.fullPath } }
   if (to.path === '/login' && auth.authenticated) return '/workspace'
+  const required = to.meta.permissions ?? []
+  if (required.length && !required.every((permission) => auth.hasPermission(permission))) return '/workspace'
 })
 
 export default router

@@ -17,7 +17,9 @@ async function submit() {
   try {
     await auth.login(form)
     const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/workspace'
-    await router.replace(redirect)
+    const resolved = router.resolve(redirect)
+    const safeRedirect = resolved.matched.length > 0 && !resolved.matched.some((item) => item.meta.fallback)
+    await router.replace(safeRedirect ? redirect : '/workspace')
   } catch (error) {
     errorMessage.value = error instanceof ApiRequestError ? error.message : '暂时无法登录，请稍后重试。'
   } finally {
@@ -53,4 +55,3 @@ async function submit() {
     </el-form>
   </main>
 </template>
-

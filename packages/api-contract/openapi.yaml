@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: OriginGuard API
-  version: 0.1.0
-  description: M0 contract skeleton; endpoints are added with their owning domain milestone.
+  version: 0.2.0
+  description: M1.1 contract for identity, media metadata registration, investigation cases, workflow, and audit history.
 servers:
   - url: http://localhost:8080
 paths:
@@ -78,7 +78,178 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/TenantIdentitySummary' }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/assets:
+    get:
+      operationId: listMediaAssets
+      tags: [Media]
+      responses:
+        '200':
+          description: Media records in the authenticated tenant
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/MediaAsset' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      operationId: registerMediaAsset
+      tags: [Media]
+      description: Registers metadata and a SHA-256 fingerprint; M1.1 does not upload file bytes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterMediaAssetRequest' }
+      responses:
+        '201':
+          description: Media record created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MediaAsset' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+  /api/v1/assets/{assetId}:
+    parameters:
+      - $ref: '#/components/parameters/AssetId'
+    get:
+      operationId: getMediaAsset
+      tags: [Media]
+      responses:
+        '200':
+          description: Tenant-scoped media record
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MediaAsset' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/cases:
+    get:
+      operationId: listInvestigationCases
+      tags: [Investigation]
+      responses:
+        '200':
+          description: Cases in the authenticated tenant
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/InvestigationCase' }
+    post:
+      operationId: createInvestigationCase
+      tags: [Investigation]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateCaseRequest' }
+      responses:
+        '201':
+          description: Draft case created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CaseDetails' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+  /api/v1/cases/{caseId}:
+    parameters:
+      - $ref: '#/components/parameters/CaseId'
+    get:
+      operationId: getInvestigationCase
+      tags: [Investigation]
+      responses:
+        '200':
+          description: Case and linked media records
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CaseDetails' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      operationId: updateInvestigationCase
+      tags: [Investigation]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateCaseRequest' }
+      responses:
+        '200':
+          description: Case updated using optimistic locking
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CaseDetails' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/v1/cases/{caseId}/assets:
+    parameters:
+      - $ref: '#/components/parameters/CaseId'
+    post:
+      operationId: linkMediaAssetToCase
+      tags: [Investigation]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LinkAssetRequest' }
+      responses:
+        '200':
+          description: Media record linked to the draft or rejected case
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CaseDetails' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/v1/cases/{caseId}/transitions:
+    parameters:
+      - $ref: '#/components/parameters/CaseId'
+    post:
+      operationId: transitionInvestigationCase
+      tags: [Investigation]
+      description: M1.1 exposes transitions through WAITING_REVIEW; review decisions and archival remain reserved.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TransitionCaseRequest' }
+      responses:
+        '200':
+          description: Case status updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CaseDetails' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/v1/cases/{caseId}/audit:
+    parameters:
+      - $ref: '#/components/parameters/CaseId'
+    get:
+      operationId: getCaseAuditHistory
+      tags: [Audit]
+      responses:
+        '200':
+          description: Append-only audit entries for the case
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AuditEntry' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
 components:
+  parameters:
+    AssetId:
+      name: assetId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    CaseId:
+      name: caseId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
   securitySchemes:
     bearerAuth:
       type: http
@@ -92,6 +263,21 @@ components:
           schema: { $ref: '#/components/schemas/ApiError' }
     Forbidden:
       description: Authenticated user lacks the required permission
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+    NotFound:
+      description: Resource does not exist in the authenticated tenant
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+    Conflict:
+      description: State, version, or uniqueness conflict
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+    ValidationFailed:
+      description: Request validation failed
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ApiError' }
@@ -142,6 +328,117 @@ components:
         tenantCode: { type: string }
         users: { type: integer }
         enabledUsers: { type: integer }
+    RegisterMediaAssetRequest:
+      type: object
+      additionalProperties: false
+      required: [originalFilename, contentType, byteSize, sha256]
+      properties:
+        originalFilename: { type: string, maxLength: 255 }
+        contentType: { type: string, maxLength: 127, pattern: '^[iI][mM][aA][gG][eE]/[a-zA-Z0-9.+-]{1,100}$' }
+        byteSize: { type: integer, format: int64, minimum: 1, maximum: 5368709120 }
+        sha256: { type: string, pattern: '^[0-9a-fA-F]{64}$' }
+    MediaAsset:
+      type: object
+      required: [id, tenantId, originalFilename, contentType, byteSize, sha256, storageStatus, createdBy, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        tenantId: { type: string, format: uuid }
+        originalFilename: { type: string }
+        contentType: { type: string }
+        byteSize: { type: integer, format: int64 }
+        sha256: { type: string }
+        storageStatus: { type: string, enum: [REGISTERED, STORED, QUARANTINED] }
+        createdBy: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+    CasePriority:
+      type: string
+      enum: [LOW, NORMAL, HIGH, CRITICAL]
+    CaseStatus:
+      type: string
+      enum: [DRAFT, READY, INVESTIGATING, WAITING_REVIEW, CONFIRMED, REJECTED, FAILED, ARCHIVED]
+    InvestigationCase:
+      type: object
+      required: [id, tenantId, caseNumber, title, description, priority, status, createdBy, version, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        tenantId: { type: string, format: uuid }
+        caseNumber: { type: string }
+        title: { type: string }
+        description: { type: string }
+        priority: { $ref: '#/components/schemas/CasePriority' }
+        status: { $ref: '#/components/schemas/CaseStatus' }
+        createdBy: { type: string, format: uuid }
+        assignedInvestigatorId: { type: [string, 'null'], format: uuid }
+        assignedReviewerId: { type: [string, 'null'], format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CaseMediaAsset:
+      type: object
+      required: [id, originalFilename, contentType, byteSize, sha256, storageStatus, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        originalFilename: { type: string }
+        contentType: { type: string }
+        byteSize: { type: integer, format: int64 }
+        sha256: { type: string }
+        storageStatus: { type: string, enum: [REGISTERED, STORED, QUARANTINED] }
+        createdAt: { type: string, format: date-time }
+    CaseDetails:
+      type: object
+      required: [investigationCase, assets]
+      properties:
+        investigationCase: { $ref: '#/components/schemas/InvestigationCase' }
+        assets:
+          type: array
+          items: { $ref: '#/components/schemas/CaseMediaAsset' }
+    CreateCaseRequest:
+      type: object
+      additionalProperties: false
+      required: [title, priority, assetIds]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 200 }
+        description: { type: string, maxLength: 2000, default: '' }
+        priority: { $ref: '#/components/schemas/CasePriority' }
+        assetIds:
+          type: array
+          maxItems: 20
+          uniqueItems: true
+          items: { type: string, format: uuid }
+    UpdateCaseRequest:
+      type: object
+      additionalProperties: false
+      required: [title, priority, version]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 200 }
+        description: { type: string, maxLength: 2000, default: '' }
+        priority: { $ref: '#/components/schemas/CasePriority' }
+        version: { type: integer, format: int64, minimum: 0 }
+    LinkAssetRequest:
+      type: object
+      additionalProperties: false
+      required: [assetId, version]
+      properties:
+        assetId: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+    TransitionCaseRequest:
+      type: object
+      additionalProperties: false
+      required: [targetStatus, version]
+      properties:
+        targetStatus:
+          type: string
+          enum: [READY, INVESTIGATING, WAITING_REVIEW]
+        version: { type: integer, format: int64, minimum: 0 }
+    AuditEntry:
+      type: object
+      required: [id, action, details, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        actorUserId: { type: [string, 'null'], format: uuid }
+        action: { type: string }
+        details: { type: object, additionalProperties: true }
+        createdAt: { type: string, format: date-time }
     ApiError:
       type: object
       required: [code, message]

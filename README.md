@@ -2,7 +2,7 @@
 
 OriginGuard 是一个面向内容审核与数字取证场景的 AIGC 内容真实性检测、篡改分析和来源溯源平台。
 
-> 当前状态：M0 已完成；身份、RBAC 与租户隔离基础已实现。业务案件闭环和真实模型尚未接入。
+> 当前状态：M0 已完成；M1.1 媒体记录与案件骨架已实现。人工证据、审核决定、文件存储和真实模型尚未接入。
 
 ## 当前包含
 
@@ -14,6 +14,10 @@ OriginGuard 是一个面向内容审核与数字取证场景的 AIGC 内容真�
 - 架构决策记录（ADR）和基础 CI
 - Spring Security、JWT Access Token、HttpOnly Refresh Cookie 轮换
 - 调查员、审核员、管理员三角色权限与租户上下文
+- 媒体元数据与 SHA-256 指纹登记（M1.1 不上传文件内容）
+- 调查案件创建、列表、详情、编辑和媒体关联
+- `DRAFT → READY → INVESTIGATING → WAITING_REVIEW` 状态推进
+- 案件乐观锁、租户范围查询和追加式审计时间线
 
 ## 仓库结构
 
@@ -78,3 +82,16 @@ npm run dev
 本地租户代码为 `demo`，开发账号为 `investigator`、`reviewer`、`admin`，初始密码均为 `OriginGuard@123`。密码可通过 `ORIGINGUARD_DEMO_PASSWORD` 覆盖；这些账号不得用于生产环境。
 
 管理员默认不拥有 `review:approve` 或 `report:finalize`，需要参与复核的人必须单独获得审核员角色，并继续受禁止自审规则约束。实现说明见 [身份与权限基础](docs/product/identity-rbac.md)。
+
+## M1.1 使用流程
+
+使用 `investigator` 登录后：
+
+```text
+媒体资产 → 选择本地图片 → 浏览器计算 SHA-256 → 登记媒体记录
+调查案件 → 创建案件并关联媒体 → 标记 READY → 开始调查 → 提交人工审核
+```
+
+当前只保存文件名、MIME、大小和 SHA-256，文件内容不会离开浏览器。MinIO 分片上传、文件安全检查、EXIF 和 C2PA 属于后续媒体取证阶段。
+
+管理员和审核员可以查看当前租户案件，但不能创建或编辑案件；人工审核通过、驳回和报告终签尚未在 M1.1 开放。详细边界见 [M1.1 实现说明](docs/product/m1.1-media-case-foundation.md)。

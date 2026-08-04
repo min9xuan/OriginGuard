@@ -21,8 +21,14 @@ export const useAuthStore = defineStore('auth', () => {
     if (initialized.value) return
     try {
       if (accessToken.value) {
-        user.value = await authApi.me(accessToken.value)
-        persist()
+        try {
+          user.value = await authApi.me(accessToken.value)
+          persist()
+        } catch {
+          clearSession()
+          const response = await authApi.refresh()
+          setSession(response.accessToken, response.user)
+        }
       } else {
         const response = await authApi.refresh()
         setSession(response.accessToken, response.user)
@@ -36,7 +42,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function logout() {
     try {
-      if (accessToken.value) await authApi.logout(accessToken.value)
+      await authApi.logout(accessToken.value)
     } finally {
       clearSession()
     }
@@ -78,4 +84,3 @@ function readStoredUser(): AuthenticatedUser | null {
     return null
   }
 }
-
