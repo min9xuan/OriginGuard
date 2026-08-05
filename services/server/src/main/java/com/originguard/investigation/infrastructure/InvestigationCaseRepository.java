@@ -123,6 +123,29 @@ public class InvestigationCaseRepository {
         return updated == 1;
     }
 
+    public boolean updateAssignment(
+            UUID tenantId,
+            UUID id,
+            long expectedVersion,
+            UUID investigatorId,
+            UUID reviewerId) {
+        int updated = jdbcClient.sql("""
+                        UPDATE investigation_case
+                        SET assigned_investigator_id = :investigatorId,
+                            assigned_reviewer_id = :reviewerId,
+                            version = version + 1,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE tenant_id = :tenantId AND id = :id AND version = :expectedVersion
+                        """)
+                .param("investigatorId", investigatorId)
+                .param("reviewerId", reviewerId)
+                .param("tenantId", tenantId)
+                .param("id", id)
+                .param("expectedVersion", expectedVersion)
+                .update();
+        return updated == 1;
+    }
+
     public boolean isAssetLinked(UUID caseId, UUID assetId) {
         return jdbcClient.sql("""
                         SELECT EXISTS(

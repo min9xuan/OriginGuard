@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: OriginGuard API
-  version: 0.2.0
-  description: M1.1 contract for identity, media metadata registration, investigation cases, workflow, and audit history.
+  version: 0.3.0
+  description: M1.2 contract for identity, media records, investigation cases, human evidence, independent review, and audit history.
 servers:
   - url: http://localhost:8080
 paths:
@@ -207,7 +207,7 @@ paths:
     post:
       operationId: transitionInvestigationCase
       tags: [Investigation]
-      description: M1.1 exposes transitions through WAITING_REVIEW; review decisions and archival remain reserved.
+      description: Investigator transitions through WAITING_REVIEW; submission requires an assigned independent reviewer and at least one evidence record.
       requestBody:
         required: true
         content:
@@ -222,6 +222,97 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /api/v1/cases/assignees:
+    get:
+      operationId: listCaseAssignees
+      tags: [Investigation]
+      responses:
+        '200':
+          description: Enabled investigators and reviewers in the authenticated tenant
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AssignableUser' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/cases/{caseId}/assignment:
+    parameters:
+      - $ref: '#/components/parameters/CaseId'
+    post:
+      operationId: assignCaseDuties
+      tags: [Investigation]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AssignmentRequest' }
+      responses:
+        '200':
+          description: Investigator and independent reviewer assigned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InvestigationCase' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+  /api/v1/cases/{caseId}/workflow:
+    parameters:
+      - $ref: '#/components/parameters/CaseId'
+    get:
+      operationId: getInvestigationWorkflow
+      tags: [Investigation, Review]
+      responses:
+        '200':
+          description: Immutable evidence and review task history
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkflowView' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/cases/{caseId}/evidence:
+    parameters:
+      - $ref: '#/components/parameters/CaseId'
+    post:
+      operationId: addHumanEvidence
+      tags: [Investigation]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AddEvidenceRequest' }
+      responses:
+        '200':
+          description: Human observation appended to the case
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InvestigationEvidence' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+  /api/v1/cases/{caseId}/reviews/{taskId}/decision:
+    parameters:
+      - $ref: '#/components/parameters/CaseId'
+      - $ref: '#/components/parameters/ReviewTaskId'
+    post:
+      operationId: decideReviewTask
+      tags: [Review]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReviewDecisionRequest' }
+      responses:
+        '200':
+          description: Review decided and case moved to CONFIRMED or REJECTED
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkflowView' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
   /api/v1/cases/{caseId}/audit:
     parameters:
       - $ref: '#/components/parameters/CaseId'
@@ -247,6 +338,11 @@ components:
       schema: { type: string, format: uuid }
     CaseId:
       name: caseId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ReviewTaskId:
+      name: taskId
       in: path
       required: true
       schema: { type: string, format: uuid }
@@ -430,6 +526,87 @@ components:
           type: string
           enum: [READY, INVESTIGATING, WAITING_REVIEW]
         version: { type: integer, format: int64, minimum: 0 }
+    AssignableUser:
+      type: object
+      required: [id, username, displayName, role]
+      properties:
+        id: { type: string, format: uuid }
+        username: { type: string }
+        displayName: { type: string }
+        role: { type: string, enum: [INVESTIGATOR, REVIEWER] }
+    AssignmentRequest:
+      type: object
+      additionalProperties: false
+      required: [investigatorId, reviewerId, version]
+      properties:
+        investigatorId: { type: string, format: uuid }
+        reviewerId: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+    EvidenceConclusion:
+      type: string
+      enum: [LIKELY_AUTHENTIC, LIKELY_SYNTHETIC, INCONCLUSIVE]
+    EvidenceConfidence:
+      type: string
+      enum: [LOW, MEDIUM, HIGH]
+    AddEvidenceRequest:
+      type: object
+      additionalProperties: false
+      required: [assetId, title, observation, conclusion, confidence, version]
+      properties:
+        assetId: { type: string, format: uuid }
+        title: { type: string, minLength: 1, maxLength: 200 }
+        observation: { type: string, minLength: 1, maxLength: 4000 }
+        conclusion: { $ref: '#/components/schemas/EvidenceConclusion' }
+        confidence: { $ref: '#/components/schemas/EvidenceConfidence' }
+        version: { type: integer, format: int64, minimum: 0 }
+    InvestigationEvidence:
+      type: object
+      required: [id, assetId, evidenceType, title, observation, conclusion, confidence, createdBy, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        assetId: { type: string, format: uuid }
+        evidenceType: { type: string, enum: [HUMAN_OBSERVATION] }
+        title: { type: string }
+        observation: { type: string }
+        conclusion: { $ref: '#/components/schemas/EvidenceConclusion' }
+        confidence: { $ref: '#/components/schemas/EvidenceConfidence' }
+        createdBy: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+    ReviewStatus:
+      type: string
+      enum: [PENDING, APPROVED, REJECTED]
+    ReviewTask:
+      type: object
+      required: [id, reviewerId, status, decisionReason, createdBy, version, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        reviewerId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/ReviewStatus' }
+        decisionReason: { type: string }
+        createdBy: { type: string, format: uuid }
+        decidedBy: { type: [string, 'null'], format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        createdAt: { type: string, format: date-time }
+        decidedAt: { type: [string, 'null'], format: date-time }
+    WorkflowView:
+      type: object
+      required: [evidence, reviewTasks]
+      properties:
+        evidence:
+          type: array
+          items: { $ref: '#/components/schemas/InvestigationEvidence' }
+        reviewTasks:
+          type: array
+          items: { $ref: '#/components/schemas/ReviewTask' }
+    ReviewDecisionRequest:
+      type: object
+      additionalProperties: false
+      required: [decision, taskVersion, caseVersion]
+      properties:
+        decision: { type: string, enum: [APPROVED, REJECTED] }
+        reason: { type: string, maxLength: 2000, default: '' }
+        taskVersion: { type: integer, format: int64, minimum: 0 }
+        caseVersion: { type: integer, format: int64, minimum: 0 }
     AuditEntry:
       type: object
       required: [id, action, details, createdAt]

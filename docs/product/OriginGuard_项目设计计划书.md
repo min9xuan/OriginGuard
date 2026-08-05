@@ -2,18 +2,29 @@
 
 > **项目全称**：OriginGuard——AIGC 内容真实性检测、篡改分析与来源溯源 Agent 平台  
 > **目标岗位**：Java 后端开发 / AI Agent 应用开发 / AI 安全工程 / 多媒体内容安全  
-> **文档版本**：v2.1  
+> **文档版本**：v2.2
 > **制定日期**：2026-08-01  
-> **最近更新**：2026-08-03  
-> **当前状态**：M0 与 M1.1 媒体记录/案件骨架已完成，继续推进 M1 业务核心
-> **实施目标**：先完成一个具有真实业务闭环、可部署、可测试、可解释并可写入简历的 v1.0，不规划博士研究增强版本  
+> **最近更新**：2026-08-05
+> **当前状态**：M0、M1.1 与 M1.2 业务底座已完成，下一步进入 M2 Agent Harness 最小纵向切片
+> **实施目标**：从零实现可测试、可恢复、可审计的 Agent Harness，使用真实性调查业务验证 Skills、Tools、RAG、Checkpoint、Policy 与 Human-in-the-loop 全流程
 > **项目形态**：GitHub 开源 Monorepo、前后端分离、Java 业务与 Agent 中枢、Python 算法服务、Docker Compose 一键启动
 
 ---
 
 # 0. 本版计划书的调整
 
-## 0.1 v2.1 相较于 v2.0 的调整
+## 0.1 v2.2 相较于 v2.1 的调整
+
+1. 明确项目第一目标是从零实现并理解完整 Agent Harness，而不是把 Agent 作为普通内容审核系统完成后的附加功能。
+2. 真实性调查是 Harness 的真实承载场景；单一“是否 AI 生成”分类不足以证明 Agent 的必要性，Agent 应负责按案件上下文选择调查 Skills、调用受控 Tools、按需检索 RAG、聚合冲突证据并生成结构化调查草稿。
+3. 调整实施顺序：M1 业务底座完成后，先实现使用 `FakePlanner + MockTool + 静态知识` 的 Harness 最小纵向切片，再逐步替换为真实 LLM、媒体工具、算法工具和混合检索。
+4. 将 Skill Registry 提升为 Harness 一等组件。Skill 不是单段 Prompt，而是包含版本、触发条件、输入输出 Schema、工具白名单、权限、预算、超时、降级策略、证据类型和评测用例的可执行能力包。
+5. RAG 明确服务于 Agent 决策与解释，只检索取证指南、模型卡、安全策略和审核后的历史案件；当前案件事实、权限和任务状态继续通过结构化 Application Tool 获取。
+6. 确定性 Workflow Controller 始终掌握状态迁移、权限、事务、预算和人工审批；LLM Planner 只在允许的动作集合中作出建议，不能直接执行 SQL、Shell、任意 URL、人工审核或报告终签。
+7. 媒体真实存储、预览和最终裁决展示仍是必要产品能力，但作为 Harness 的输入与输出展示层并行演进，不再推迟 Harness 主体开发。
+8. 当前 M1.2 已完成职责分派、人工证据、独立审核和审计，为 Agent 的身份继承、证据落库、Human-in-the-loop 与 Trace 提供业务边界。
+
+## 0.2 v2.1 相较于 v2.0 的调整
 
 1. v1.0 角色由五个收敛为三个：`INVESTIGATOR`、`REVIEWER`、`ADMIN`。
 2. 原 `MODEL_OPERATOR` 的模型管理职责并入 `ADMIN`，原 `AUDITOR` 暂不作为独立角色实现。
@@ -27,7 +38,7 @@
 
 详细角色权限以《OriginGuard 角色与权限规划》v1.1 为准；职责分离决策见 ADR-006。
 
-## 0.2 v2.0 相较于 v1.0 的调整
+## 0.3 v2.0 相较于 v1.0 的调整
 
 v2.0 相较于 v1.0 做出以下调整：
 
@@ -45,7 +56,18 @@ v2.0 相较于 v1.0 做出以下调整：
 
 ## 1.1 一句话定位
 
-OriginGuard 是面向企业内容审核团队、媒体平台和数字取证人员的 AIGC 内容安全平台。系统对上传的图像进行来源凭证验证、元数据分析、AIGC/Deepfake 检测、局部篡改定位和相似内容检索，并由 Agent 结合取证知识、模型能力说明和历史案件，生成可追踪证据的调查报告，最终交由人工审核员确认。
+OriginGuard 是一个以真实性调查为场景、从零构建 Agent Harness 的工程项目。系统通过有限状态工作流约束 Agent 使用版本化 Skills、受控 Tools 和按需 RAG，完成来源凭证、元数据、AIGC/Deepfake、局部篡改与相似内容调查，持久化全过程 Trace 和 Checkpoint，生成可追踪证据的结构化结论并交由独立审核员确认。
+
+### 项目学习目标
+
+项目优先证明以下能力，而不是只追求检测模型分数：
+
+- 能解释一次 Agent Task 从创建、规划、工具调用、观察、再规划到终止的完整生命周期；
+- 能自行实现 Context Builder、Planner Adapter、Skill Registry、Tool Registry、Policy Engine、Checkpoint、Loop Guard、Trace 和 Human-in-the-loop；
+- 能说明结构化业务查询、RAG 检索、模型推理和 LLM 推理各自的边界；
+- 能通过 Fake Planner、Mock Tool 和固定语料对 Harness 做确定性测试，再安全替换为真实外部能力；
+- 能展示权限继承、租户隔离、失败恢复、预算耗尽、循环终止、工具越权和间接 Prompt Injection 防护；
+- 能让 Agent 的每项关键判断追溯到案件事实、工具 Observation、RAG Citation 或人工证据。
 
 ## 1.2 项目解决的实际问题
 
@@ -473,6 +495,7 @@ case:create
 case:read
 case:update
 case:submit
+case:assign
 case:archive
 agent:run
 agent:cancel
@@ -1527,6 +1550,56 @@ AgentController
       └── LoopGuard
 ```
 
+## 12.2.1 Skill Registry
+
+Skill 是面向具体调查目标的、可版本化和可评测的能力包；Tool 是 Skill 在运行时获准调用的原子执行能力。两者不能混为一层：
+
+```text
+Skill：如何完成一类调查目标
+Tool：执行一次确定、可校验的外部动作
+```
+
+第一批 Skills：
+
+| Skill | 目标 | 允许工具 |
+|---|---|---|
+| `inspect_media_metadata` | 判断文件结构和元数据是否存在异常 | `getCaseContext`、`extractMetadata` |
+| `verify_content_origin` | 检查 C2PA 与来源凭证 | `verifyContentCredential`、`searchForensicKnowledge` |
+| `assess_ai_generation` | 选择检测器并解释模型输出 | `runGeneralAigcDetector`、`searchModelDocumentation` |
+| `investigate_local_tampering` | 调查局部篡改风险 | `runTamperLocalization`、`searchForensicKnowledge` |
+| `compare_related_media` | 判断相似资产和可能版本关系 | `calculatePerceptualHash`、`searchSimilarAssets` |
+| `resolve_evidence_conflicts` | 对冲突证据提出补充调查建议 | 只读 Evidence/RAG Tools |
+| `draft_investigation_conclusion` | 生成带证据引用的结构化草稿 | 只读 Case/Evidence/RAG Tools |
+
+每个 Skill 至少包含：
+
+```yaml
+code: inspect_media_metadata
+version: 1.0.0
+description: 检查媒体元数据并形成结构化观察
+requiredPermissions: [asset:read]
+allowedCaseStatuses: [INVESTIGATING]
+allowedTools: [getCaseContext, extractMetadata]
+inputSchema: skill/input/inspect-media-metadata.schema.json
+outputSchema: skill/output/inspect-media-metadata.schema.json
+maxSteps: 4
+tokenBudget: 3000
+timeoutSeconds: 30
+evidenceTypes: [FILE_METADATA, HUMAN_OBSERVATION]
+fallbackStrategy: RETURN_PARTIAL_OBSERVATION
+instructionTemplate: skills/inspect-media-metadata/instructions.md
+evalCases: skills/inspect-media-metadata/evals
+```
+
+Skill 运行规则：
+
+- Planner 只能从当前租户、角色、案件状态和任务预算允许的 Skill 列表中选择；
+- Skill 的工具白名单在执行前由 Policy Engine 强制校验，Prompt 中声称拥有权限不能改变白名单；
+- 输入和输出必须通过 JSON Schema 校验，失败进入可观测的修复或降级路径；
+- Skill 版本、指令版本、工具版本和 RAG 索引版本写入 Trace；
+- Skill 不得直接改变人工审核决定，也不得绕过 Application Service 写业务表；
+- 每个 Skill 必须同时提供成功、工具失败、越权、预算耗尽和恶意证据输入测试。
+
 ## 12.3 Agent 状态
 
 ```mermaid
@@ -2293,11 +2366,13 @@ Documentation
 ```text
 M0 Repository & Architecture
 M1 Business Core
-M2 Media & Forensic Tools
-M3 RAG Knowledge System
-M4 Agent Investigation Loop
-M5 Security & Human Review
-M6 Testing & v1.0 Release
+M2 Agent Harness Minimum Vertical Slice
+M3 Media & Forensic Tools
+M4 Agent RAG Knowledge Loop
+M5 Algorithm Tools & Reviewed Verdict
+M6 Real Planner Investigation Loop
+M7 Security, Report & Archive
+M8 Testing & v1.0 Release
 ```
 
 ## 17.5 GitHub Actions
@@ -2434,7 +2509,7 @@ docker compose up -d
 
 ## 阶段 1：用户、权限和案件业务
 
-### 当前进度（v2.1）
+### 当前进度（v2.2）
 
 已完成：
 
@@ -2450,8 +2525,13 @@ docker compose up -d
 - 正式案件状态模型，以及开放到 `WAITING_REVIEW` 的 M1.1 状态推进；
 - 案件乐观锁和关键变化追加式审计；
 - 媒体与案件前端页面、OpenAPI 和业务集成测试。
+- 管理员案件职责分派，且管理员不具备审核通过或驳回权限；
+- 调查员针对关联媒体追加不可覆盖的人工观察证据；
+- 提交审核时自动创建指定审核员任务，并强制禁止自审；
+- 审核通过进入 `CONFIRMED`，审核驳回进入 `REJECTED`；
+- 案件与审核任务双乐观锁，以及分派、证据、任务和决定的完整审计。
 
-待完成：调查员/审核员分派、人工证据、审核任务与决定、归档，以及覆盖后续业务对象的完整审计。
+M1 在“人工证据可提交、独立审核可通过或驳回”处收口。报告草稿、最终裁决展示和归档在 Agent 能输出结构化调查结论后完成，避免先构建没有真实调查内容的空报告流程。
 
 ### 完成内容
 
@@ -2475,97 +2555,120 @@ docker compose up -d
 - 管理员调用审核或报告终签接口；
 - 重复提交。
 
-### 完成标准
+### 当前完成标准
 
 不接 AI 时可以完成：
 
 ```text
 登录
-→ 上传资产记录
+→ 登记资产记录
 → 创建案件
 → 分派
 → 人工记录证据
-→ 审核
-→ 归档
+→ 独立审核通过或驳回
 ```
 
 ---
 
-## 阶段 2：媒体资产和基础取证
+## 阶段 2：Agent Harness 最小纵向切片
 
 ### 完成内容
 
-- 分片上传；
-- MinIO；
-- SHA-256；
-- pHash；
-- MIME/魔数；
-- EXIF；
-- C2PA Sidecar；
-- 前端媒体查看器；
-- 来源关系基础。
+- `AgentTask`、`AgentStep`、`AgentCheckpoint` 和 `AgentTrace` 持久化模型；
+- 确定性 `WorkflowController` 与任务状态机；
+- `ContextBuilder` 读取案件、媒体元数据、人工证据、租户与权限；
+- `Planner` 接口，以及不依赖外部 LLM 的 `FakePlanner`；
+- `SkillRegistry`、Skill Manifest、输入输出 Schema 和版本记录；
+- `ToolRegistry`、`ToolExecutor` 与首个只读 Mock Tool；
+- `PolicyEngine` 校验权限、案件状态和 Skill 工具白名单；
+- 每步 Checkpoint、超时、重试、取消、Step Budget 和 Loop Guard；
+- Agent Trace 查询接口与前端时间线；
+- Agent 生成结构化调查草稿，但不能执行审核决定。
 
 ### 测试
 
-- 伪扩展名；
-- 损坏文件；
-- 大图；
-- 重复上传；
-- Sidecar 超时；
-- 路径穿越；
-- C2PA 无凭证/有效/无效。
+- Fake Planner 产生确定工具序列；
+- 未注册 Skill 与 Tool；
+- Schema 参数错误；
+- 工具越权与跨租户访问；
+- 工具超时和有限重试；
+- 重复动作触发 Loop Guard；
+- Step/Token Budget 耗尽；
+- Checkpoint 后恢复；
+- 取消与重复启动幂等；
+- 恶意 Observation 不能修改系统目标；
+- Agent 无法调用人工审核接口。
 
 ### 完成标准
 
-每个媒体资产都有：
+即使不接真实 LLM、模型和向量库，也能稳定演示：
 
 ```text
-对象键
-哈希
-元数据
-安全检查结果
-C2PA 结果
+创建 AgentTask
+→ Context Builder
+→ Fake Planner 选择 Skill
+→ Skill 调用 Mock Tool
+→ 保存 Observation 与 Evidence
+→ Checkpoint
+→ 生成结构化调查草稿
+→ 前端查看完整 Trace
 ```
+
+### M2.1 首次实现边界
+
+第一轮只完成一个可测试的 Harness 骨架：
+
+```text
+AgentTask/Step/Trace 数据库迁移
+→ 任务创建、启动、查询和取消 API
+→ Context Builder
+→ Fake Planner
+→ 一个版本化 Skill
+→ 一个只读 Mock Tool
+→ Observation/Evidence 落库
+→ Checkpoint 与 Step Budget
+→ 前端 Trace 页面
+```
+
+第一轮明确不接真实 LLM、不下载模型、不实现完整 RAG、不上传媒体文件，也不追求多 Skill 自动规划。验收重点是 Harness 边界、状态恢复、权限、审计和确定性测试，而不是生成内容的“智能程度”。
 
 ---
 
-## 阶段 3：真实算法服务
+## 阶段 3：真实媒体与基础取证 Tools
 
 ### 完成内容
 
-- FastAPI；
-- RabbitMQ Worker；
-- 统一模型接口；
-- 一个真实检测模型；
-- 一个真实定位模型；
-- 热力图；
-- 模型 Manifest；
-- Mock Provider；
-- 模型结果页面。
+- 图片上传和 MinIO 对象存储；
+- MIME/魔数、大小和图片解码校验；
+- 授权媒体预览与缩略图；
+- 区分 `SUBJECT` 目标媒体与 `SUPPORTING_EVIDENCE` 辅助材料；
+- EXIF/基础元数据提取 Tool；
+- SHA-256、pHash 和相似媒体 Tool；
+- C2PA Sidecar Tool；
+- 将阶段 2 的 Mock Tool 逐个替换为真实适配器；
+- Observation 标准化并转换为可追踪 Evidence。
 
 ### 测试
 
-- Golden Test；
-- 契约；
-- 超时；
-- Worker 崩溃；
-- 重复消息；
-- OOM；
-- 模型许可证；
-- 压缩和缩放。
+- 伪扩展名、损坏文件和大图；
+- 路径穿越与跨租户预览；
+- 对象上传失败和重复上传；
+- EXIF 缺失与恶意元数据；
+- pHash 稳定性；
+- C2PA 无凭证、有效、无效和 Sidecar 超时；
+- Tool 输出 Schema 与 Trace 关联。
 
 ### 完成标准
 
-Java 能以统一协议发起分析并保存真实结果，页面可展示分数、模型版本、警告和热力图。
+审核员可以查看案件目标媒体；Agent 能通过受控 Tools 获取真实媒体观察，失败时按 Harness 规则降级或暂停。
 
 ---
 
-## 阶段 4：RAG 数据和摄取
+## 阶段 4：Agent RAG 最小知识闭环
 
 ### 完成内容
 
-- 初始知识文档；
-- 合成历史案件；
+- 取证指南、模型卡、安全策略和审核历史案件四类知识源；
 - 文档上传；
 - Tika；
 - OCR；
@@ -2574,7 +2677,12 @@ Java 能以统一协议发起分析并保存真实结果，页面可展示分数
 - 元数据；
 - 发布审核；
 - Embedding；
-- pgvector。
+- pgvector；
+- PostgreSQL Full-Text Search；
+- 租户、文档类型、发布状态、模型版本和信任等级前置过滤；
+- RRF 混合检索、可替换 Reranker 与 Citation；
+- `RagRetriever` 作为 Tool 接入阶段 2 Harness；
+- Query、候选 Chunk、分数、最终引用、索引版本、延迟和 Token 写入 Trace。
 
 ### 测试
 
@@ -2584,7 +2692,11 @@ Java 能以统一协议发起分析并保存真实结果，页面可展示分数
 - 重复文档；
 - 版本；
 - 未审核文档不可检索；
-- OCR 恶意指令标记。
+- OCR 恶意指令标记；
+- 关键词/向量/RRF 检索；
+- 权限和版本过滤；
+- 无结果与 Reranker 失败回退；
+- 引用准确性与 Prompt Injection。
 
 ### 完成标准
 
@@ -2598,65 +2710,64 @@ Java 能以统一协议发起分析并保存真实结果，页面可展示分数
 10 条安全策略
 ```
 
-并可在页面查看文档、Chunk 和索引状态。
+并可由 Agent 按调查阶段检索正确知识、返回引用且不能把文档内容当作系统指令。
 
 ---
 
-## 阶段 5：RAG 检索与评测
+## 阶段 5：真实算法 Tools 与证据裁决展示
 
 ### 完成内容
 
-- Query Rewrite；
-- 权限过滤；
-- Vector Search；
-- Full-Text Search；
-- RRF；
-- Reranker；
-- Context Builder；
-- 引用；
-- RAG 日志；
-- RAG Eval。
+- FastAPI 与 RabbitMQ Worker；
+- 统一模型 Tool 协议；
+- 一个真实 AIGC/Deepfake 检测模型；
+- 一个真实局部篡改定位模型；
+- 模型 Manifest、版本、哈希、许可证和 Model Card；
+- Mock Provider 与真实 Provider 明确隔离；
+- 模型分数、适用性警告和热力图；
+- Agent 根据媒体特征和 Skill 约束选择模型 Tool；
+- 调查员提交目标媒体裁决建议；
+- 审核员确认后展示 `AI_GENERATED`、`NOT_AI_GENERATED` 或 `INCONCLUSIVE`，保留历史而不覆盖媒体固有属性。
 
 ### 测试
 
-- Recall@5；
-- MRR；
-- 版本过滤；
-- 跨租户；
-- 无结果；
-- Reranker 失败回退；
-- Prompt Injection；
-- 引用准确性。
+- Golden Test 和模型输出契约；
+- Worker 崩溃、超时、重复消息与 OOM；
+- 压缩、缩放和截图场景；
+- 模型版本与许可证；
+- Agent 选择不适用模型时被 Policy/Skill 约束拦截；
+- 模型冲突不能自动变成人工最终裁决；
+- 最终裁决权限、自审禁止和审计。
 
 ### 完成标准
 
-对预设问题：
+完成真实纵向链路：
 
 ```text
-没有 C2PA 凭证是否能证明伪造？
+目标媒体
+→ Agent 选择算法 Skill
+→ 模型 Tool
+→ RAG 检索对应 Model Card
+→ 形成带限制的证据
+→ 人工审核
+→ 页面展示已审核裁决
 ```
-
-必须检索到正确文档，不能混淆“无凭证”和“签名无效”。
 
 ---
 
-## 阶段 6：Agent 调查闭环
+## 阶段 6：真实 LLM Planner 与完整调查闭环
 
 ### 完成内容
 
-- AgentTask；
-- State；
-- Planner；
-- Tool Registry；
-- Tool Executor；
-- RAG Tools；
-- Algorithm Tools；
-- Evidence Aggregator；
-- Checkpoint；
-- Loop Guard；
-- Trace；
-- SSE；
-- 报告草稿。
+- 在阶段 2 的 Planner 接口下接入真实 LLM Adapter；
+- 结构化 Planner 输出和失败修复；
+- 多 Skill 按需选择与组合；
+- 真实 RAG Tools、媒体 Tools 和算法 Tools；
+- Evidence Aggregator 与冲突证据矩阵；
+- 动态补充调查和 Human-in-the-loop 暂停；
+- SSE 实时 Trace；
+- 带 Tool/RAG/Evidence 引用的报告草稿；
+- Fake Planner 保留为回归测试和离线模式。
 
 ### 测试
 

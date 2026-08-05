@@ -8,10 +8,14 @@ import org.springframework.stereotype.Component;
 @Component
 public class CaseAccessPolicy {
     public void requireCanModify(InvestigationCase investigationCase, CurrentActor actor) {
-        boolean ownsCase = investigationCase.createdBy().equals(actor.userId());
-        boolean assigned = actor.userId().equals(investigationCase.assignedInvestigatorId());
-        if (!ownsCase && !assigned) {
-            throw new AccessDeniedException("Only the case creator or assigned investigator can modify it");
+        if (!actor.userId().equals(investigationCase.assignedInvestigatorId())) {
+            throw new AccessDeniedException("Only the assigned investigator can modify the case");
+        }
+    }
+
+    public void requireAssignedInvestigator(InvestigationCase investigationCase, CurrentActor actor) {
+        if (!actor.userId().equals(investigationCase.assignedInvestigatorId())) {
+            throw new AccessDeniedException("Only the assigned investigator can add evidence");
         }
     }
 }

@@ -49,6 +49,7 @@ public class LocalIdentitySeeder implements ApplicationRunner {
             "ADMIN",
             List.of(
                     "asset:read",
+                    "case:assign",
                     "case:read",
                     "agent:trace:read",
                     "report:read",

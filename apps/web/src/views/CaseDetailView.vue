@@ -6,20 +6,42 @@ import { caseApi } from '../api/cases'
 import { ApiRequestError } from '../api/http'
 import { mediaApi } from '../api/media'
 import { useAuthStore } from '../stores/auth'
-import type { AuditEntry, CaseDetails, CasePriority, CaseStatus, MediaAsset } from '../types/business'
-import { nextM11Transition } from '../utils/case-workflow'
+import type {
+  AssignableUser,
+  AuditEntry,
+  CaseDetails,
+  CasePriority,
+  CaseStatus,
+  CaseWorkflow,
+  EvidenceConclusion,
+  EvidenceConfidence,
+  MediaAsset,
+  ReviewStatus,
+} from '../types/business'
+import { nextInvestigatorTransition } from '../utils/case-workflow'
 import { formatBytes, formatDate } from '../utils/format'
 
 const auth = useAuthStore()
 const route = useRoute()
 const caseId = route.params.caseId as string
 const details = ref<CaseDetails | null>(null)
+const workflow = ref<CaseWorkflow>({ evidence: [], reviewTasks: [] })
 const allAssets = ref<MediaAsset[]>([])
+const assignees = ref<AssignableUser[]>([])
 const audit = ref<AuditEntry[]>([])
 const loading = ref(false)
 const saving = ref(false)
 const selectedAssetId = ref('')
 const edit = reactive({ title: '', description: '', priority: 'NORMAL' as CasePriority })
+const assignment = reactive({ investigatorId: '', reviewerId: '' })
+const evidence = reactive({
+  assetId: '',
+  title: '',
+  observation: '',
+  conclusion: 'INCONCLUSIVE' as EvidenceConclusion,
+  confidence: 'MEDIUM' as EvidenceConfidence,
+})
+const review = reactive({ decision: 'APPROVED' as ReviewStatus, reason: '' })
 
 const current = computed(() => details.value?.investigationCase ?? null)
 const canOperate = computed(() => {
@@ -30,29 +52,54 @@ const canOperate = computed(() => {
       (item.createdBy === auth.user?.id || item.assignedInvestigatorId === auth.user?.id),
   )
 })
-const canEdit = computed(() => Boolean(canOperate.value && current.value && ['DRAFT', 'REJECTED'].includes(current.value.status)))
+const canEdit = computed(() => Boolean(
+  canOperate.value && current.value && ['DRAFT', 'REJECTED'].includes(current.value.status),
+))
+const canAddEvidence = computed(() => Boolean(
+  current.value &&
+    current.value.status === 'INVESTIGATING' &&
+    current.value.assignedInvestigatorId === auth.user?.id &&
+    auth.hasPermission('case:update'),
+))
+const canAssign = computed(() => Boolean(
+  current.value &&
+    auth.hasPermission('case:assign') &&
+    ['DRAFT', 'READY', 'INVESTIGATING', 'REJECTED'].includes(current.value.status),
+))
+const investigatorOptions = computed(() => assignees.value.filter((user) => user.role === 'INVESTIGATOR'))
+const reviewerOptions = computed(() => assignees.value.filter((user) => user.role === 'REVIEWER'))
 const availableAssets = computed(() => {
   const linked = new Set(details.value?.assets.map((asset) => asset.id) ?? [])
   return allAssets.value.filter((asset) => !linked.has(asset.id))
 })
+const pendingReview = computed(() => workflow.value.reviewTasks.find((task) => task.status === 'PENDING') ?? null)
+const canReview = computed(() => Boolean(
+  current.value?.status === 'WAITING_REVIEW' &&
+    pendingReview.value?.reviewerId === auth.user?.id &&
+    (auth.hasPermission('review:approve') || auth.hasPermission('review:reject')),
+))
 const nextTransition = computed<{ target: CaseStatus; label: string } | null>(() => {
   const status = current.value?.status
   return status
-    ? nextM11Transition(status, canOperate.value, auth.hasPermission('case:submit'))
+    ? nextInvestigatorTransition(status, canOperate.value, auth.hasPermission('case:submit'))
     : null
 })
 
 async function load() {
   loading.value = true
   try {
-    const [caseResult, assetsResult, auditResult] = await Promise.all([
+    const requests = [
       caseApi.get(caseId, auth.accessToken),
       mediaApi.list(auth.accessToken),
       caseApi.audit(caseId, auth.accessToken),
-    ])
+      caseApi.workflow(caseId, auth.accessToken),
+    ] as const
+    const [caseResult, assetsResult, auditResult, workflowResult] = await Promise.all(requests)
     setDetails(caseResult)
     allAssets.value = assetsResult
     audit.value = auditResult
+    workflow.value = workflowResult
+    assignees.value = await caseApi.assignees(auth.accessToken)
   } catch (error) {
     showError(error)
   } finally {
@@ -65,72 +112,100 @@ function setDetails(value: CaseDetails) {
   edit.title = value.investigationCase.title
   edit.description = value.investigationCase.description
   edit.priority = value.investigationCase.priority
+  assignment.investigatorId = value.investigationCase.assignedInvestigatorId ?? ''
+  assignment.reviewerId = value.investigationCase.assignedReviewerId ?? ''
 }
 
 async function save() {
   if (!current.value) return
-  saving.value = true
-  try {
-    setDetails(await caseApi.update(
-      caseId,
-      { ...edit, version: current.value.version },
-      auth.accessToken,
-    ))
+  await mutate(async () => {
+    await caseApi.update(caseId, { ...edit, version: current.value!.version }, auth.accessToken)
     ElMessage.success('案件信息已更新')
-    await reloadAudit()
-  } catch (error) {
-    await handleMutationError(error)
-  } finally {
-    saving.value = false
-  }
+  })
 }
 
 async function linkAsset() {
   if (!current.value || !selectedAssetId.value) return
-  saving.value = true
-  try {
-    setDetails(await caseApi.linkAsset(
-      caseId,
-      selectedAssetId.value,
-      current.value.version,
-      auth.accessToken,
-    ))
+  await mutate(async () => {
+    await caseApi.linkAsset(caseId, selectedAssetId.value, current.value!.version, auth.accessToken)
     selectedAssetId.value = ''
     ElMessage.success('媒体已关联到案件')
-    await reloadAudit()
-  } catch (error) {
-    await handleMutationError(error)
-  } finally {
-    saving.value = false
-  }
+  })
+}
+
+async function assignCase() {
+  if (!current.value || !assignment.investigatorId || !assignment.reviewerId) return
+  await mutate(async () => {
+    await caseApi.assign(caseId, { ...assignment, version: current.value!.version }, auth.accessToken)
+    ElMessage.success('调查员与独立审核员已分派')
+  })
+}
+
+async function addEvidence() {
+  if (!current.value || !evidence.assetId || !evidence.title.trim() || !evidence.observation.trim()) return
+  await mutate(async () => {
+    await caseApi.addEvidence(caseId, { ...evidence, version: current.value!.version }, auth.accessToken)
+    evidence.title = ''
+    evidence.observation = ''
+    ElMessage.success('人工证据已记录')
+  })
 }
 
 async function transition() {
   if (!current.value || !nextTransition.value) return
+  await mutate(async () => {
+    await caseApi.transition(
+      caseId,
+      nextTransition.value!.target,
+      current.value!.version,
+      auth.accessToken,
+    )
+    ElMessage.success(`案件状态已更新为 ${nextTransition.value!.target}`)
+  })
+}
+
+async function decideReview() {
+  if (!current.value || !pendingReview.value) return
+  await mutate(async () => {
+    await caseApi.decideReview(
+      caseId,
+      pendingReview.value!.id,
+      {
+        decision: review.decision,
+        reason: review.reason,
+        taskVersion: pendingReview.value!.version,
+        caseVersion: current.value!.version,
+      },
+      auth.accessToken,
+    )
+    review.reason = ''
+    ElMessage.success(review.decision === 'APPROVED' ? '审核已通过' : '案件已驳回')
+  })
+}
+
+async function mutate(action: () => Promise<void>) {
   saving.value = true
   try {
-    setDetails(await caseApi.transition(
-      caseId,
-      nextTransition.value.target,
-      current.value.version,
-      auth.accessToken,
-    ))
-    ElMessage.success(`案件状态已更新为 ${nextTransition.value.target}`)
-    await reloadAudit()
+    await action()
+    await load()
   } catch (error) {
-    await handleMutationError(error)
+    showError(error)
+    if (error instanceof ApiRequestError && ['CASE_VERSION_CONFLICT', 'REVIEW_VERSION_CONFLICT'].includes(error.code)) {
+      await load()
+    }
   } finally {
     saving.value = false
   }
 }
 
-async function reloadAudit() {
-  audit.value = await caseApi.audit(caseId, auth.accessToken)
+function assigneeName(id: string | null) {
+  if (!id) return '未分派'
+  const user = assignees.value.find((item) => item.id === id)
+  return user ? `${user.displayName}（${user.username}）` : id
 }
 
-async function handleMutationError(error: unknown) {
-  showError(error)
-  if (error instanceof ApiRequestError && error.code === 'CASE_VERSION_CONFLICT') await load()
+function assetName(id: string) {
+  return details.value?.assets.find((asset) => asset.id === id)?.originalFilename ?? id
 }
 
 function showError(error: unknown) {
@@ -172,12 +247,31 @@ onMounted(load)
 
         <article class="panel workflow-panel">
           <div><span>当前状态</span><strong>{{ current.status }}</strong></div>
-          <p>DRAFT → READY → INVESTIGATING → WAITING_REVIEW</p>
+          <p>DRAFT → READY → INVESTIGATING → WAITING_REVIEW → CONFIRMED / REJECTED</p>
           <el-button v-if="nextTransition" type="primary" :loading="saving" @click="transition">
             {{ nextTransition.label }}
           </el-button>
-          <small v-else>M1.1 不处理人工审核决定和报告归档。</small>
+          <small v-else>当前身份或状态没有可执行的状态推进操作。</small>
         </article>
+      </section>
+
+      <section class="panel assignment-panel">
+        <div class="section-heading">
+          <div><h2>职责分派</h2><p>调查与审核必须由不同人员承担</p></div>
+        </div>
+        <div v-if="canAssign" class="assignment-form">
+          <el-select v-model="assignment.investigatorId" placeholder="选择调查员">
+            <el-option v-for="user in investigatorOptions" :key="user.id" :label="`${user.displayName}（${user.username}）`" :value="user.id" />
+          </el-select>
+          <el-select v-model="assignment.reviewerId" placeholder="选择审核员">
+            <el-option v-for="user in reviewerOptions" :key="user.id" :label="`${user.displayName}（${user.username}）`" :value="user.id" />
+          </el-select>
+          <el-button type="primary" :disabled="!assignment.investigatorId || !assignment.reviewerId" :loading="saving" @click="assignCase">保存分派</el-button>
+        </div>
+        <div v-else class="assignment-summary">
+          <span>调查员：{{ assigneeName(current.assignedInvestigatorId) }}</span>
+          <span>审核员：{{ assigneeName(current.assignedReviewerId) }}</span>
+        </div>
       </section>
 
       <section class="panel media-panel">
@@ -200,8 +294,64 @@ onMounted(load)
         <el-empty v-else description="尚未关联媒体，案件不能进入 READY" />
       </section>
 
+      <section class="panel evidence-panel">
+        <div class="section-heading"><div><h2>人工证据</h2><p>调查观察只追加，不在原记录上覆盖</p></div></div>
+        <el-form v-if="canAddEvidence" class="evidence-form" label-position="top">
+          <div class="form-grid">
+            <el-form-item label="关联媒体">
+              <el-select v-model="evidence.assetId" placeholder="选择案件媒体">
+                <el-option v-for="asset in details.assets" :key="asset.id" :label="asset.originalFilename" :value="asset.id" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="证据标题"><el-input v-model="evidence.title" maxlength="200" /></el-form-item>
+            <el-form-item label="判断结论">
+              <el-select v-model="evidence.conclusion">
+                <el-option label="疑似真实" value="LIKELY_AUTHENTIC" />
+                <el-option label="疑似合成" value="LIKELY_SYNTHETIC" />
+                <el-option label="无法判断" value="INCONCLUSIVE" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="置信程度">
+              <el-select v-model="evidence.confidence">
+                <el-option label="低" value="LOW" /><el-option label="中" value="MEDIUM" /><el-option label="高" value="HIGH" />
+              </el-select>
+            </el-form-item>
+          </div>
+          <el-form-item label="观察说明"><el-input v-model="evidence.observation" type="textarea" :rows="4" maxlength="4000" show-word-limit /></el-form-item>
+          <el-button type="primary" :disabled="!evidence.assetId || !evidence.title.trim() || !evidence.observation.trim()" :loading="saving" @click="addEvidence">记录证据</el-button>
+        </el-form>
+        <div v-if="workflow.evidence.length" class="evidence-list">
+          <article v-for="item in workflow.evidence" :key="item.id" class="evidence-card">
+            <div><strong>{{ item.title }}</strong><el-tag size="small">{{ item.conclusion }}</el-tag><el-tag size="small" type="info">{{ item.confidence }}</el-tag></div>
+            <p>{{ item.observation }}</p>
+            <small>{{ assetName(item.assetId) }} · {{ formatDate(item.createdAt) }}</small>
+          </article>
+        </div>
+        <el-empty v-else description="进入调查状态后，由分派的调查员记录至少一条人工证据" />
+      </section>
+
+      <section class="panel review-panel">
+        <div class="section-heading"><div><h2>审核任务</h2><p>提交审核时自动创建，只能由指定审核员决定</p></div></div>
+        <div v-if="canReview && pendingReview" class="review-decision">
+          <el-radio-group v-model="review.decision">
+            <el-radio-button value="APPROVED">审核通过</el-radio-button>
+            <el-radio-button value="REJECTED">驳回案件</el-radio-button>
+          </el-radio-group>
+          <el-input v-model="review.reason" type="textarea" :rows="3" maxlength="2000" placeholder="审核意见；驳回时必填" />
+          <el-button type="primary" :disabled="review.decision === 'REJECTED' && !review.reason.trim()" :loading="saving" @click="decideReview">提交审核决定</el-button>
+        </div>
+        <ol v-if="workflow.reviewTasks.length" class="review-list">
+          <li v-for="task in workflow.reviewTasks" :key="task.id">
+            <el-tag :type="task.status === 'APPROVED' ? 'success' : task.status === 'REJECTED' ? 'danger' : 'warning'">{{ task.status }}</el-tag>
+            <span>{{ formatDate(task.createdAt) }}</span>
+            <p>{{ task.decisionReason || '等待审核决定' }}</p>
+          </li>
+        </ol>
+        <el-empty v-else description="案件提交 WAITING_REVIEW 后将生成审核任务" />
+      </section>
+
       <section class="panel audit-panel">
-        <div class="section-heading"><div><h2>审计时间线</h2><p>关键业务变化只追加、不覆盖</p></div></div>
+        <div class="section-heading"><div><h2>审计时间线</h2><p>分派、证据和审核决定都会留痕</p></div></div>
         <ol class="audit-list">
           <li v-for="entry in audit" :key="entry.id">
             <span>{{ formatDate(entry.createdAt) }}</span>

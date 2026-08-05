@@ -198,7 +198,98 @@ class BusinessCoreIntegrationTests {
 
         transition(token, caseId, "READY", 0, 1);
         transition(token, caseId, "INVESTIGATING", 1, 2);
-        transition(token, caseId, "WAITING_REVIEW", 2, 3);
+        mockMvc.perform(post("/api/v1/cases/{id}/transitions", caseId)
+                        .header("Authorization", bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(transitionJson("WAITING_REVIEW", 2)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CASE_EVIDENCE_REQUIRED"));
+    }
+
+    @Test
+    void assignmentEvidenceAndIndependentReviewFormACompleteWorkflow() throws Exception {
+        String investigator = token("investigator");
+        String admin = token("admin");
+        String reviewer = token("reviewer");
+        String assetId = registerAsset(investigator, randomSha());
+        MvcResult created = createCase(investigator, "M1.2 人工审核闭环", assetId);
+        String caseId = JsonPath.read(created.getResponse().getContentAsString(), "$.investigationCase.id");
+
+        transition(investigator, caseId, "READY", 0, 1);
+        transition(investigator, caseId, "INVESTIGATING", 1, 2);
+
+        UUID investigatorId = userId("investigator");
+        UUID reviewerId = userId("reviewer");
+        mockMvc.perform(post("/api/v1/cases/{id}/assignment", caseId)
+                        .header("Authorization", bearer(admin))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"investigatorId":"%s","reviewerId":"%s","version":2}
+                                """.formatted(investigatorId, reviewerId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.assignedInvestigatorId").value(investigatorId.toString()))
+                .andExpect(jsonPath("$.assignedReviewerId").value(reviewerId.toString()))
+                .andExpect(jsonPath("$.version").value(3));
+
+        mockMvc.perform(post("/api/v1/cases/{id}/evidence", caseId)
+                        .header("Authorization", bearer(investigator))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "assetId":"%s",
+                                  "title":"人物边缘存在异常融合",
+                                  "observation":"发丝与背景交界区域出现重复纹理，且局部光照方向不一致。",
+                                  "conclusion":"LIKELY_SYNTHETIC",
+                                  "confidence":"HIGH",
+                                  "version":3
+                                }
+                                """.formatted(assetId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.evidenceType").value("HUMAN_OBSERVATION"))
+                .andExpect(jsonPath("$.conclusion").value("LIKELY_SYNTHETIC"));
+
+        transition(investigator, caseId, "WAITING_REVIEW", 4, 5);
+
+        MvcResult workflow = mockMvc.perform(get("/api/v1/cases/{id}/workflow", caseId)
+                        .header("Authorization", bearer(reviewer)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.evidence.length()").value(1))
+                .andExpect(jsonPath("$.reviewTasks[0].status").value("PENDING"))
+                .andExpect(jsonPath("$.reviewTasks[0].reviewerId").value(reviewerId.toString()))
+                .andReturn();
+        String taskId = JsonPath.read(workflow.getResponse().getContentAsString(), "$.reviewTasks[0].id");
+
+        mockMvc.perform(post("/api/v1/cases/{caseId}/reviews/{taskId}/decision", caseId, taskId)
+                        .header("Authorization", bearer(admin))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(reviewJson("APPROVED", "", 0, 5)))
+                .andExpect(status().isForbidden());
+
+        mockMvc.perform(post("/api/v1/cases/{caseId}/reviews/{taskId}/decision", caseId, taskId)
+                        .header("Authorization", bearer(reviewer))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(reviewJson("REJECTED", "", 0, 5)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("REVIEW_REASON_REQUIRED"));
+
+        mockMvc.perform(post("/api/v1/cases/{caseId}/reviews/{taskId}/decision", caseId, taskId)
+                        .header("Authorization", bearer(reviewer))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(reviewJson("APPROVED", "人工复核同意该判断", 0, 5)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.reviewTasks[0].status").value("APPROVED"));
+
+        mockMvc.perform(get("/api/v1/cases/{id}", caseId).header("Authorization", bearer(reviewer)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.investigationCase.status").value("CONFIRMED"))
+                .andExpect(jsonPath("$.investigationCase.version").value(6));
+        mockMvc.perform(get("/api/v1/cases/{id}/audit", caseId)
+                        .header("Authorization", bearer(reviewer)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[*].action", hasItem("CASE_ASSIGNMENT_CHANGED")))
+                .andExpect(jsonPath("$[*].action", hasItem("EVIDENCE_ADDED")))
+                .andExpect(jsonPath("$[*].action", hasItem("REVIEW_TASK_CREATED")))
+                .andExpect(jsonPath("$[*].action", hasItem("REVIEW_APPROVED")));
     }
 
     @Test
@@ -283,6 +374,19 @@ class BusinessCoreIntegrationTests {
         return """
                 {"targetStatus":"%s","version":%d}
                 """.formatted(target, version);
+    }
+
+    private String reviewJson(String decision, String reason, int taskVersion, int caseVersion) {
+        return """
+                {"decision":"%s","reason":"%s","taskVersion":%d,"caseVersion":%d}
+                """.formatted(decision, reason, taskVersion, caseVersion);
+    }
+
+    private UUID userId(String username) {
+        return jdbcClient.sql("SELECT id FROM sys_user WHERE username = :username")
+                .param("username", username)
+                .query(UUID.class)
+                .single();
     }
 
     private String randomSha() {

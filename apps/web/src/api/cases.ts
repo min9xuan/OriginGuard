@@ -1,10 +1,16 @@
 import type {
   AuditEntry,
+  AssignableUser,
   CaseDetails,
+  CaseWorkflow,
   CasePriority,
   CaseStatus,
   CreateCaseRequest,
+  EvidenceConclusion,
+  EvidenceConfidence,
+  InvestigationEvidence,
   InvestigationCase,
+  ReviewStatus,
 } from '../types/business'
 import { apiRequest } from './http'
 
@@ -49,5 +55,57 @@ export const caseApi = {
   },
   audit(caseId: string, accessToken: string) {
     return apiRequest<AuditEntry[]>(`/cases/${caseId}/audit`, {}, accessToken)
+  },
+  assignees(accessToken: string) {
+    return apiRequest<AssignableUser[]>('/cases/assignees', {}, accessToken)
+  },
+  assign(
+    caseId: string,
+    request: { investigatorId: string; reviewerId: string; version: number },
+    accessToken: string,
+  ) {
+    return apiRequest<InvestigationCase>(
+      `/cases/${caseId}/assignment`,
+      { method: 'POST', body: JSON.stringify(request) },
+      accessToken,
+    )
+  },
+  workflow(caseId: string, accessToken: string) {
+    return apiRequest<CaseWorkflow>(`/cases/${caseId}/workflow`, {}, accessToken)
+  },
+  addEvidence(
+    caseId: string,
+    request: {
+      assetId: string
+      title: string
+      observation: string
+      conclusion: EvidenceConclusion
+      confidence: EvidenceConfidence
+      version: number
+    },
+    accessToken: string,
+  ) {
+    return apiRequest<InvestigationEvidence>(
+      `/cases/${caseId}/evidence`,
+      { method: 'POST', body: JSON.stringify(request) },
+      accessToken,
+    )
+  },
+  decideReview(
+    caseId: string,
+    taskId: string,
+    request: {
+      decision: ReviewStatus
+      reason: string
+      taskVersion: number
+      caseVersion: number
+    },
+    accessToken: string,
+  ) {
+    return apiRequest<CaseWorkflow>(
+      `/cases/${caseId}/reviews/${taskId}/decision`,
+      { method: 'POST', body: JSON.stringify(request) },
+      accessToken,
+    )
   },
 }

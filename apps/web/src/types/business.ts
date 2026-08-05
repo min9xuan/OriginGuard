@@ -66,3 +66,44 @@ export interface AuditEntry {
   details: Record<string, unknown>
   createdAt: string
 }
+
+export interface AssignableUser {
+  id: string
+  username: string
+  displayName: string
+  role: 'INVESTIGATOR' | 'REVIEWER'
+}
+
+export type EvidenceConclusion = 'LIKELY_AUTHENTIC' | 'LIKELY_SYNTHETIC' | 'INCONCLUSIVE'
+export type EvidenceConfidence = 'LOW' | 'MEDIUM' | 'HIGH'
+
+export interface InvestigationEvidence {
+  id: string
+  assetId: string
+  evidenceType: 'HUMAN_OBSERVATION'
+  title: string
+  observation: string
+  conclusion: EvidenceConclusion
+  confidence: EvidenceConfidence
+  createdBy: string
+  createdAt: string
+}
+
+export type ReviewStatus = 'PENDING' | 'APPROVED' | 'REJECTED'
+
+export interface ReviewTask {
+  id: string
+  reviewerId: string
+  status: ReviewStatus
+  decisionReason: string
+  createdBy: string
+  decidedBy: string | null
+  version: number
+  createdAt: string
+  decidedAt: string | null
+}
+
+export interface CaseWorkflow {
+  evidence: InvestigationEvidence[]
+  reviewTasks: ReviewTask[]
+}

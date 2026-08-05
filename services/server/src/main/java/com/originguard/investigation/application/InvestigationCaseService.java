@@ -37,6 +37,7 @@ public class InvestigationCaseService {
     private final MediaAssetService mediaAssetService;
     private final CurrentActorProvider actorProvider;
     private final CaseAccessPolicy accessPolicy;
+    private final InvestigationWorkflowService workflowService;
     private final AuditService auditService;
     private final Clock clock;
 
@@ -45,12 +46,14 @@ public class InvestigationCaseService {
             MediaAssetService mediaAssetService,
             CurrentActorProvider actorProvider,
             CaseAccessPolicy accessPolicy,
+            InvestigationWorkflowService workflowService,
             AuditService auditService,
             Clock clock) {
         this.repository = repository;
         this.mediaAssetService = mediaAssetService;
         this.actorProvider = actorProvider;
         this.accessPolicy = accessPolicy;
+        this.workflowService = workflowService;
         this.auditService = auditService;
         this.clock = clock;
     }
@@ -174,6 +177,9 @@ public class InvestigationCaseService {
         boolean updated = repository.updateStatus(
                 actor.tenantId(), id, expectedVersion, current.status(), target);
         requireVersion(updated);
+        if (target == CaseStatus.WAITING_REVIEW) {
+            workflowService.prepareReviewTask(current, actor);
+        }
         auditService.record(
                 actor.tenantId(),
                 actor.userId(),

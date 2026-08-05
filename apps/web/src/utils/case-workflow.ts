@@ -5,7 +5,7 @@ export interface CaseTransitionAction {
   label: string
 }
 
-export function nextM11Transition(
+export function nextInvestigatorTransition(
   status: CaseStatus,
   canOperate: boolean,
   canSubmit: boolean,
