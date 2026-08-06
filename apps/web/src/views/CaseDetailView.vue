@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, reactive, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
+import { agentApi } from '../api/agents'
 import { caseApi } from '../api/cases'
 import { ApiRequestError } from '../api/http'
 import { mediaApi } from '../api/media'
@@ -23,6 +24,7 @@ import { formatBytes, formatDate } from '../utils/format'
 
 const auth = useAuthStore()
 const route = useRoute()
+const router = useRouter()
 const caseId = route.params.caseId as string
 const details = ref<CaseDetails | null>(null)
 const workflow = ref<CaseWorkflow>({ evidence: [], reviewTasks: [] })
@@ -60,6 +62,12 @@ const canAddEvidence = computed(() => Boolean(
     current.value.status === 'INVESTIGATING' &&
     current.value.assignedInvestigatorId === auth.user?.id &&
     auth.hasPermission('case:update'),
+))
+const canRunAgent = computed(() => Boolean(
+  current.value &&
+    current.value.status === 'INVESTIGATING' &&
+    current.value.assignedInvestigatorId === auth.user?.id &&
+    auth.hasPermission('agent:run'),
 ))
 const canAssign = computed(() => Boolean(
   current.value &&
@@ -164,6 +172,26 @@ async function transition() {
   })
 }
 
+async function startAgent() {
+  if (!current.value) return
+  saving.value = true
+  try {
+    const created = await agentApi.create(
+      caseId,
+      '检查案件媒体元数据并形成可追踪证据',
+      3,
+      auth.accessToken,
+    )
+    const completed = await agentApi.run(created.task.id, created.task.version, auth.accessToken)
+    ElMessage.success('M2.1 Agent 任务已完成，可查看完整 Trace')
+    await router.push(`/agent-tasks/${completed.task.id}`)
+  } catch (error) {
+    showError(error)
+  } finally {
+    saving.value = false
+  }
+}
+
 async function decideReview() {
   if (!current.value || !pendingReview.value) return
   await mutate(async () => {
@@ -251,7 +279,10 @@ onMounted(load)
           <el-button v-if="nextTransition" type="primary" :loading="saving" @click="transition">
             {{ nextTransition.label }}
           </el-button>
-          <small v-else>当前身份或状态没有可执行的状态推进操作。</small>
+          <el-button v-if="canRunAgent" type="success" :loading="saving" @click="startAgent">
+            运行 M2.1 Agent
+          </el-button>
+          <small v-if="!nextTransition && !canRunAgent">当前身份或状态没有可执行的状态推进操作。</small>
         </article>
       </section>
 

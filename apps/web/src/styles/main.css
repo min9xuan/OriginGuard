@@ -112,6 +112,24 @@ button, input, textarea, select { font: inherit; }
 .audit-list li { display: grid; grid-template-columns: 180px 210px minmax(0, 1fr); gap: 14px; padding: 14px 0; border-bottom: 1px solid #1e343d; align-items: center; }
 .audit-list span { color: #78909a; font-size: 12px; }
 .audit-list code { overflow: hidden; color: #8bb9ad; text-overflow: ellipsis; white-space: nowrap; }
+.agent-metrics { margin-bottom: 18px; }
+.agent-metrics strong { overflow-wrap: anywhere; font-size: 19px; }
+.agent-actions { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 18px; }
+.agent-actions h2 { margin: 0; }
+.agent-actions p { margin-bottom: 0; }
+.agent-conclusion, .agent-trace { margin-bottom: 18px; }
+.agent-conclusion pre, .agent-trace pre, .observation-card pre, .checkpoint-card pre { overflow: auto; margin: 12px 0 0; padding: 14px; border: 1px solid #203741; border-radius: 9px; color: #a9c4ce; background: #081117; font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.trace-list { display: grid; gap: 14px; margin: 0; padding: 0; list-style: none; }
+.trace-list li { display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 14px; padding-bottom: 14px; border-bottom: 1px solid #1e343d; }
+.trace-list li > div { min-width: 0; }
+.trace-index { display: grid; width: 34px; height: 34px; place-items: center; border-radius: 50%; color: #06120f; background: #48d8b0; font-weight: 800; }
+.trace-list strong, .trace-list small { display: block; }
+.trace-list small { margin-top: 5px; color: #78909a; }
+.trace-list details { color: #91d7c4; }
+.trace-list summary { cursor: pointer; }
+.agent-detail-grid { margin-bottom: 0; }
+.observation-card, .checkpoint-card { margin-top: 12px; padding: 16px; border: 1px solid #263f49; border-radius: 11px; background: #0a161c; }
+.checkpoint-card small { display: block; margin-top: 5px; color: #78909a; }
 
 @media (max-width: 820px) {
   .auth-shell { grid-template-columns: 1fr; gap: 36px; padding: 56px 0; }
@@ -120,7 +138,7 @@ button, input, textarea, select { font: inherit; }
   .app-frame { grid-template-columns: 1fr; }
   .app-sidebar { position: static; height: auto; padding: 18px; }
   .brand { padding-bottom: 14px; }
-  .app-nav { grid-template-columns: repeat(3, 1fr); }
+  .app-nav { grid-template-columns: repeat(4, 1fr); }
   .app-nav a { padding: 10px 6px; text-align: center; }
   .sidebar-user { display: none; }
   .page-shell, .narrow-page { width: min(100% - 28px, 1180px); padding-top: 34px; }
@@ -133,4 +151,5 @@ button, input, textarea, select { font: inherit; }
   .inline-action .el-select { flex: 1; width: auto; }
   .audit-list li { grid-template-columns: 1fr; gap: 5px; }
   .review-list li { grid-template-columns: 1fr; gap: 7px; }
+  .agent-actions { align-items: stretch; flex-direction: column; }
 }

@@ -2,7 +2,7 @@
 
 OriginGuard 是一个面向内容审核与数字取证场景的 AIGC 内容真实性检测、篡改分析和来源溯源平台。
 
-> 当前状态：M0、M1.1 与 M1.2 已完成；媒体/案件、职责分派、人工证据和独立审核已形成可运行闭环。文件存储、报告归档和真实模型尚未接入。
+> 当前状态：M0、M1.1、M1.2 与 M2.1 已完成；业务闭环之上已有可运行、可审计的 Agent Harness 最小纵向切片。文件存储、RAG、真实 Planner/Tools/模型和报告归档尚未接入。
 
 ## 当前包含
 
@@ -21,6 +21,9 @@ OriginGuard 是一个面向内容审核与数字取证场景的 AIGC 内容真�
 - 调查员针对案件媒体追加人工观察证据
 - 审核任务自动创建，审核员通过或驳回后进入 `CONFIRMED` / `REJECTED`
 - 案件乐观锁、租户范围查询和追加式审计时间线
+- `AgentTask → Context Builder → Fake Planner → Skill → Mock Tool → Observation → Checkpoint → Trace` 完整链路
+- 版本化 Skill、Tool 白名单、权限/案件状态策略和 Step Budget
+- Agent 任务列表、结构化结论、Observation、Checkpoint 与逐步 Trace 页面
 
 ## 仓库结构
 
@@ -106,3 +109,9 @@ reviewer → 查看证据与审核任务 → 通过或填写理由驳回
 当前只保存文件名、MIME、大小和 SHA-256，文件内容不会离开浏览器。MinIO 分片上传、文件安全检查、EXIF 和 C2PA 属于后续媒体取证阶段。
 
 管理员可以查看和分派案件，但不能创建、调查或作出审核决定；审核员只能决定分派给自己的任务，并禁止审核自己创建或调查的案件。详细边界见 [M1.2 实现说明](docs/product/m1.2-evidence-review-workflow.md)。
+
+## M2.1 Agent Harness 使用流程
+
+调查员将已分派给自己的案件推进到 `INVESTIGATING`，然后在案件详情点击“运行 M2.1 Agent”。任务会同步执行一个确定性流程，并跳转到 Trace 页面。具有 `agent:trace:read` 权限的用户也可从“Agent 任务”导航查看租户内任务。
+
+当前 Mock Tool 只读取数据库中已登记的媒体文件名、MIME、大小和 SHA-256，不读取媒体字节；结论固定为 `INCONCLUSIVE`，用来验证 Harness 的生命周期、权限、预算和持久化边界，不代表已具备真实性检测能力。实现说明见 [M2.1 Agent Harness 最小纵向切片](docs/product/m2.1-agent-harness-vertical-slice.md)。

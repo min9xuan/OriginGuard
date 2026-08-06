@@ -2,10 +2,10 @@
 
 > **项目全称**：OriginGuard——AIGC 内容真实性检测、篡改分析与来源溯源 Agent 平台  
 > **目标岗位**：Java 后端开发 / AI Agent 应用开发 / AI 安全工程 / 多媒体内容安全  
-> **文档版本**：v2.2
+> **文档版本**：v2.3
 > **制定日期**：2026-08-01  
 > **最近更新**：2026-08-05
-> **当前状态**：M0、M1.1 与 M1.2 业务底座已完成，下一步进入 M2 Agent Harness 最小纵向切片
+> **当前状态**：M2.1 Agent Harness 最小纵向切片已完成；下一步以真实媒体读取和基础取证 Tool 替换 Mock Tool
 > **实施目标**：从零实现可测试、可恢复、可审计的 Agent Harness，使用真实性调查业务验证 Skills、Tools、RAG、Checkpoint、Policy 与 Human-in-the-loop 全流程
 > **项目形态**：GitHub 开源 Monorepo、前后端分离、Java 业务与 Agent 中枢、Python 算法服务、Docker Compose 一键启动
 
@@ -13,7 +13,14 @@
 
 # 0. 本版计划书的调整
 
-## 0.1 v2.2 相较于 v2.1 的调整
+## 0.1 v2.3 相较于 v2.2 的调整
+
+1. 记录 M2.1 已落地：AgentTask/Step/Observation/Checkpoint 持久化、Context Builder、Fake Planner、版本化 Skill、受控 Mock Tool、Policy Engine、Step Budget 与前端 Trace。
+2. 当前结论保持 `INCONCLUSIVE`，明确它是 Harness 工程验证而不是真实 AIGC 检测结果。
+3. 下一阶段优先接入受控媒体存储、授权预览和基础取证 Tool，让 Agent 从登记元数据转向真实媒体 Observation。
+4. 真实 LLM Planner、RAG 与算法模型继续延后，沿用可替换适配器逐步替换确定性组件的路线。
+
+## 0.2 v2.2 相较于 v2.1 的调整
 
 1. 明确项目第一目标是从零实现并理解完整 Agent Harness，而不是把 Agent 作为普通内容审核系统完成后的附加功能。
 2. 真实性调查是 Harness 的真实承载场景；单一“是否 AI 生成”分类不足以证明 Agent 的必要性，Agent 应负责按案件上下文选择调查 Skills、调用受控 Tools、按需检索 RAG、聚合冲突证据并生成结构化调查草稿。
@@ -24,7 +31,7 @@
 7. 媒体真实存储、预览和最终裁决展示仍是必要产品能力，但作为 Harness 的输入与输出展示层并行演进，不再推迟 Harness 主体开发。
 8. 当前 M1.2 已完成职责分派、人工证据、独立审核和审计，为 Agent 的身份继承、证据落库、Human-in-the-loop 与 Trace 提供业务边界。
 
-## 0.2 v2.1 相较于 v2.0 的调整
+## 0.3 v2.1 相较于 v2.0 的调整
 
 1. v1.0 角色由五个收敛为三个：`INVESTIGATOR`、`REVIEWER`、`ADMIN`。
 2. 原 `MODEL_OPERATOR` 的模型管理职责并入 `ADMIN`，原 `AUDITOR` 暂不作为独立角色实现。
@@ -38,7 +45,7 @@
 
 详细角色权限以《OriginGuard 角色与权限规划》v1.1 为准；职责分离决策见 ADR-006。
 
-## 0.3 v2.0 相较于 v1.0 的调整
+## 0.4 v2.0 相较于 v1.0 的调整
 
 v2.0 相较于 v1.0 做出以下调整：
 
@@ -2631,6 +2638,17 @@ AgentTask/Step/Trace 数据库迁移
 ```
 
 第一轮明确不接真实 LLM、不下载模型、不实现完整 RAG、不上传媒体文件，也不追求多 Skill 自动规划。验收重点是 Harness 边界、状态恢复、权限、审计和确定性测试，而不是生成内容的“智能程度”。
+
+### M2.1 当前实现结果（2026-08-05）
+
+- V4 数据迁移已建立 AgentTask、AgentStep、AgentObservation 与 AgentCheckpoint；
+- 调查员可为分派给自己的 `INVESTIGATING` 案件创建、运行和取消任务；
+- Fake Planner 固定选择 `inspect_media_metadata@1.0.0`，Skill 仅允许调用 `mock.inspect_media_metadata`；
+- Policy Engine 同时检查发起者权限、租户、案件状态、职责分派与 Tool 白名单；
+- 三步预算覆盖 Skill 选择、Tool 调用和结论合成，并持久化 Trace 与 Checkpoint；
+- 前端已提供案件启动入口、任务列表和 Trace 详情；
+- PostgreSQL/Testcontainers 集成测试覆盖成功链路、越权/错误状态拒绝与取消，当前后端共 17 项测试通过；
+- Mock Tool 只读取已登记元数据，不读取文件内容，结构化草稿保持 `INCONCLUSIVE`。
 
 ---
 

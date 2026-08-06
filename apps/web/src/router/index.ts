@@ -33,6 +33,16 @@ const router = createRouter({
           component: () => import('../views/CaseDetailView.vue'),
           meta: { permissions: ['case:read'] },
         },
+        {
+          path: 'agent-tasks',
+          component: () => import('../views/AgentTasksView.vue'),
+          meta: { permissions: ['agent:trace:read'] },
+        },
+        {
+          path: 'agent-tasks/:taskId',
+          component: () => import('../views/AgentTaskDetailView.vue'),
+          meta: { permissions: ['agent:trace:read'] },
+        },
       ],
     },
     { path: '/:pathMatch(.*)*', redirect: '/workspace', meta: { fallback: true } },
