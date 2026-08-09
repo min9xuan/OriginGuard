@@ -39,7 +39,12 @@ export interface AgentObservation {
   taskId: string
   caseId: string
   assetId: string | null
-  evidenceType: 'MEDIA_METADATA' | 'BASIC_MEDIA_FORENSICS'
+  evidenceType:
+    | 'MEDIA_METADATA'
+    | 'BASIC_MEDIA_FORENSICS'
+    | 'FILE_INTEGRITY'
+    | 'IMAGE_METADATA'
+    | 'PERCEPTUAL_SIMILARITY'
   summary: string
   payload: Record<string, unknown>
   createdAt: string

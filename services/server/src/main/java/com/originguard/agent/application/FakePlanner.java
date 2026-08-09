@@ -1,14 +1,27 @@
 package com.originguard.agent.application;
 
+import java.util.List;
 import org.springframework.stereotype.Component;
 
 @Component
 public class FakePlanner {
-    public SkillSelection select(AgentExecutionContext context, String goal) {
-        return new SkillSelection(
-                SkillRegistry.METADATA_SKILL,
-                SkillRegistry.METADATA_SKILL_VERSION,
-                "M3.1 deterministic planner always starts with controlled basic media forensics");
+    public static final String PLAN_CODE = "deterministic_media_pipeline";
+    public static final String PLAN_VERSION = "1.0.0";
+
+    public List<SkillSelection> plan(AgentExecutionContext context, String goal) {
+        return List.of(
+                new SkillSelection(
+                        SkillRegistry.INTEGRITY_SKILL,
+                        SkillRegistry.SKILL_VERSION,
+                        "Verify stored bytes before deriving any other evidence"),
+                new SkillSelection(
+                        SkillRegistry.METADATA_SKILL,
+                        SkillRegistry.SKILL_VERSION,
+                        "Extract deterministic image structure and metadata facts"),
+                new SkillSelection(
+                        SkillRegistry.SIMILARITY_SKILL,
+                        SkillRegistry.SKILL_VERSION,
+                        "Compare perceptual hashes across all media linked to the case"));
     }
 
     public record SkillSelection(String skillCode, String skillVersion, String reason) {}

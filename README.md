@@ -2,7 +2,7 @@
 
 OriginGuard 是一个面向内容审核与数字取证场景的 AIGC 内容真实性检测、篡改分析和来源溯源平台。
 
-> 当前状态：M3.1 已完成；JPEG/PNG 可真实存入 MinIO，Fake Planner 已通过受控基础取证 Tool 读取媒体字节并生成可追踪 Observation。RAG、真实 Planner、C2PA、检测模型和报告归档尚未接入。
+> 当前状态：M3.2 已完成；Fake Planner 会依次运行文件完整性、图片元数据和感知相似度三个确定性 Skill，并为每一步保存 Observation、Checkpoint 与 Trace。RAG、真实 Planner、C2PA、检测模型和报告归档尚未接入。
 
 ## 当前包含
 
@@ -111,8 +111,8 @@ reviewer → 查看证据与审核任务 → 通过或填写理由驳回
 
 管理员可以查看和分派案件，但不能创建、调查或作出审核决定；审核员只能决定分派给自己的任务，并禁止审核自己创建或调查的案件。详细边界见 [M1.2 实现说明](docs/product/m1.2-evidence-review-workflow.md)。
 
-## M3.1 基础媒体取证 Agent 使用流程
+## M3.2 确定性媒体 Skill 流水线
 
-调查员先上传新的 JPEG/PNG 媒体并关联案件，将已分派给自己的案件推进到 `INVESTIGATING`，然后点击“运行基础取证 Agent”。任务会同步执行确定性流程并跳转到 Trace 页面。具有 `agent:trace:read` 权限的用户也可从“Agent 任务”导航查看租户内任务。
+调查员先上传新的 JPEG/PNG 媒体并关联案件，将已分派给自己的案件推进到 `INVESTIGATING`，然后点击“运行 Agent”。任务会同步执行确定性流程并跳转到 Trace 页面。具有 `agent:trace:read` 权限的用户也可从“Agent 任务”导航查看租户内任务。
 
-Fake Planner 仍固定选择一个 Skill，但 `media.inspect_basic_forensics` 会从 MinIO 读取真实字节，重新计算 SHA-256、校验 MIME/解码、提取尺寸和有限 EXIF、计算 dHash。由于尚无 AIGC 分类或篡改定位模型，真实性结论仍为 `INCONCLUSIVE`。实现说明见 [M3.1 真实媒体与基础取证 Tool](docs/product/m3.1-real-media-forensics.md)。
+Fake Planner 仍不调用 LLM，但会固定编排 `verify_media_integrity`、`extract_image_metadata`、`compare_perceptual_similarity` 三个版本化 Skill。对应 Tool 都会读取 MinIO 中的真实字节；由于这些确定性事实不是 AIGC 分类证据，真实性结论仍为 `INCONCLUSIVE`。实现说明见 [M3.2 多确定性 Skill](docs/product/m3.2-deterministic-media-skills.md)。

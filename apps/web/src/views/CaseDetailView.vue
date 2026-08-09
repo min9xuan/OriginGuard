@@ -182,12 +182,12 @@ async function startAgent() {
   try {
     const created = await agentApi.create(
       caseId,
-      '读取案件媒体文件并完成基础取证检查',
-      3,
+      '运行文件完整性、图片元数据和感知相似度确定性分析',
+      7,
       auth.accessToken,
     )
     const completed = await agentApi.run(created.task.id, created.task.version, auth.accessToken)
-    ElMessage.success('基础媒体取证 Agent 已完成，可查看完整 Trace')
+    ElMessage.success('确定性媒体分析 Agent 已完成，可查看完整 Trace')
     await router.push(`/agent-tasks/${completed.task.id}`)
   } catch (error) {
     showError(error)

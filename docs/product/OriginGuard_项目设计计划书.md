@@ -2,10 +2,10 @@
 
 > **项目全称**：OriginGuard——AIGC 内容真实性检测、篡改分析与来源溯源 Agent 平台  
 > **目标岗位**：Java 后端开发 / AI Agent 应用开发 / AI 安全工程 / 多媒体内容安全  
-> **文档版本**：v2.4
+> **文档版本**：v2.5
 > **制定日期**：2026-08-01  
 > **最近更新**：2026-08-09
-> **当前状态**：M3.1 真实媒体存储与基础取证 Tool 已完成；下一步连接 Agent Observation、正式证据与审核界面
+> **当前状态**：M3.2 多确定性媒体 Skill 已完成；下一步连接 Agent Observation、正式证据与审核界面
 > **实施目标**：从零实现可测试、可恢复、可审计的 Agent Harness，使用真实性调查业务验证 Skills、Tools、RAG、Checkpoint、Policy 与 Human-in-the-loop 全流程
 > **项目形态**：GitHub 开源 Monorepo、前后端分离、Java 业务与 Agent 中枢、Python 算法服务、Docker Compose 一键启动
 
@@ -13,7 +13,16 @@
 
 # 0. 本版计划书的调整
 
-## 0.1 v2.4 相较于 v2.3 的调整
+## 0.1 v2.5 相较于 v2.4 的调整
+
+1. Fake Planner 从固定选择单一 Skill 升级为固定编排三个版本化 Skill，但仍不调用 LLM。
+2. `verify_media_integrity` 重新读取 MinIO 原始字节并核验 SHA-256、字节数与 MIME。
+3. `extract_image_metadata` 独立提取图片格式、尺寸与有限 EXIF 摘要。
+4. `compare_perceptual_similarity` 对案件内媒体执行 dHash64 两两比较，输出完全相同、近似或不同的确定性结果。
+5. 每个 Skill 分别执行 Policy 与 Tool 白名单检查，并持久化 Observation 和 Checkpoint；任务预算下限调整为 7。
+6. 新结果不等同于 AIGC 判断，最终结论继续保持 `INCONCLUSIVE`。
+
+## 0.2 v2.4 相较于 v2.3 的调整
 
 1. 新增 MinIO 对象存储和 multipart 上传，服务端不再只相信浏览器提交的文件元数据。
 2. 新上传限制为 JPEG/PNG、25 MB，并执行魔数、声明 MIME、ImageIO 解码、40MP 像素上限和服务端 SHA-256 复核。
@@ -22,14 +31,14 @@
 5. Tool 会从 MinIO 读取真实字节并重新检查，Observation 类型升级为 `BASIC_MEDIA_FORENSICS`。
 6. C2PA sidecar、AIGC 分类、篡改定位、视频与 RAG 仍未接入，结论继续保持 `INCONCLUSIVE`。
 
-## 0.2 v2.3 相较于 v2.2 的调整
+## 0.3 v2.3 相较于 v2.2 的调整
 
 1. 记录 M2.1 已落地：AgentTask/Step/Observation/Checkpoint 持久化、Context Builder、Fake Planner、版本化 Skill、受控 Mock Tool、Policy Engine、Step Budget 与前端 Trace。
 2. 当前结论保持 `INCONCLUSIVE`，明确它是 Harness 工程验证而不是真实 AIGC 检测结果。
 3. 下一阶段优先接入受控媒体存储、授权预览和基础取证 Tool，让 Agent 从登记元数据转向真实媒体 Observation。
 4. 真实 LLM Planner、RAG 与算法模型继续延后，沿用可替换适配器逐步替换确定性组件的路线。
 
-## 0.3 v2.2 相较于 v2.1 的调整
+## 0.4 v2.2 相较于 v2.1 的调整
 
 1. 明确项目第一目标是从零实现并理解完整 Agent Harness，而不是把 Agent 作为普通内容审核系统完成后的附加功能。
 2. 真实性调查是 Harness 的真实承载场景；单一“是否 AI 生成”分类不足以证明 Agent 的必要性，Agent 应负责按案件上下文选择调查 Skills、调用受控 Tools、按需检索 RAG、聚合冲突证据并生成结构化调查草稿。
@@ -40,7 +49,7 @@
 7. 媒体真实存储、预览和最终裁决展示仍是必要产品能力，但作为 Harness 的输入与输出展示层并行演进，不再推迟 Harness 主体开发。
 8. 当前 M1.2 已完成职责分派、人工证据、独立审核和审计，为 Agent 的身份继承、证据落库、Human-in-the-loop 与 Trace 提供业务边界。
 
-## 0.4 v2.1 相较于 v2.0 的调整
+## 0.5 v2.1 相较于 v2.0 的调整
 
 1. v1.0 角色由五个收敛为三个：`INVESTIGATOR`、`REVIEWER`、`ADMIN`。
 2. 原 `MODEL_OPERATOR` 的模型管理职责并入 `ADMIN`，原 `AUDITOR` 暂不作为独立角色实现。
@@ -54,7 +63,7 @@
 
 详细角色权限以《OriginGuard 角色与权限规划》v1.1 为准；职责分离决策见 ADR-006。
 
-## 0.5 v2.0 相较于 v1.0 的调整
+## 0.6 v2.0 相较于 v1.0 的调整
 
 v2.0 相较于 v1.0 做出以下调整：
 
@@ -2672,6 +2681,16 @@ AgentTask/Step/Trace 数据库迁移
 - Fake Planner 与 Harness 预算、Policy、Checkpoint、Trace 保持不变；
 - PostgreSQL + MinIO Testcontainers 覆盖真实上传、伪文件拒绝、授权读取和 Agent Tool 全链路；
 - C2PA、AIGC 分类、篡改定位和视频尚未完成，不将基础完整性结果解释为真实性结论。
+
+### M3.2 当前实现结果（2026-08-09）
+
+- Fake Planner 固定生成三个 Skill 的顺序计划：完整性核验、图片元数据提取、感知相似度比较；
+- 三个 Skill 分别绑定独立 Tool 白名单，并逐个通过权限、案件状态和职责分派策略检查；
+- V6 数据迁移新增 `FILE_INTEGRITY`、`IMAGE_METADATA`、`PERCEPTUAL_SIMILARITY` 三类 Observation；
+- 每个 Skill 都保存选择原因、Tool 输入输出、结构化 Observation 与独立 Checkpoint；
+- dHash64 对案件内媒体执行两两汉明距离比较，阈值固定且输出可复现；
+- 七步预算覆盖三次 Skill 选择、三次 Tool 调用和一次结论合成；
+- 最终结论继续为 `INCONCLUSIVE`，明确元数据缺失和感知相似都不能单独证明 AIGC。
 
 ### 完成内容
 

@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: OriginGuard API
-  version: 0.5.0
-  description: M3.1 contract with MinIO-backed media upload, authorized content access, and real basic media forensics inside the deterministic Agent Harness.
+  version: 0.6.0
+  description: M3.2 contract with a three-skill deterministic media analysis pipeline inside the Agent Harness.
 servers:
   - url: http://localhost:8080
 paths:
@@ -801,7 +801,7 @@ components:
         taskId: { type: string, format: uuid }
         caseId: { type: string, format: uuid }
         assetId: { type: [string, 'null'], format: uuid }
-        evidenceType: { type: string, enum: [MEDIA_METADATA, BASIC_MEDIA_FORENSICS] }
+        evidenceType: { type: string, enum: [MEDIA_METADATA, BASIC_MEDIA_FORENSICS, FILE_INTEGRITY, IMAGE_METADATA, PERCEPTUAL_SIMILARITY] }
         summary: { type: string }
         payload: { type: object, additionalProperties: true }
         createdAt: { type: string, format: date-time }
@@ -835,7 +835,7 @@ components:
       properties:
         caseId: { type: string, format: uuid }
         goal: { type: string, minLength: 1, maxLength: 500 }
-        stepBudget: { type: integer, minimum: 3, maximum: 10 }
+        stepBudget: { type: integer, minimum: 7, maximum: 10 }
     AgentTaskVersionRequest:
       type: object
       additionalProperties: false

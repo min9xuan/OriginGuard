@@ -76,11 +76,11 @@ class AgentHarnessIntegrationTests {
                         .header("Authorization", bearer(investigator))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"caseId":"%s","goal":"读取案件媒体并完成基础取证","stepBudget":3}
+                                {"caseId":"%s","goal":"运行确定性媒体分析流水线","stepBudget":7}
                                 """.formatted(caseId)))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.task.status").value("PENDING"))
-                .andExpect(jsonPath("$.task.remainingStepBudget").value(3))
+                .andExpect(jsonPath("$.task.remainingStepBudget").value(7))
                 .andReturn();
         String taskId = JsonPath.read(created.getResponse().getContentAsString(), "$.task.id");
 
@@ -90,35 +90,70 @@ class AgentHarnessIntegrationTests {
                         .content("{\"version\":0}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.task.status").value("COMPLETED"))
-                .andExpect(jsonPath("$.task.selectedSkillCode").value("inspect_media_content"))
+                .andExpect(jsonPath("$.task.selectedSkillCode").value("deterministic_media_pipeline"))
                 .andExpect(jsonPath("$.task.selectedSkillVersion").value("1.0.0"))
                 .andExpect(jsonPath("$.task.remainingStepBudget").value(0))
-                .andExpect(jsonPath("$.task.checkpointVersion").value(1))
+                .andExpect(jsonPath("$.task.checkpointVersion").value(3))
                 .andExpect(jsonPath("$.task.conclusion.verdict").value("INCONCLUSIVE"))
-                .andExpect(jsonPath("$.steps.length()").value(7))
+                .andExpect(jsonPath("$.steps.length()").value(15))
                 .andExpect(jsonPath("$.steps[*].stepType", hasItem("TOOL_CALLED")))
                 .andExpect(jsonPath("$.steps[*].stepType", hasItem("CHECKPOINT_SAVED")))
-                .andExpect(jsonPath("$.observations.length()").value(1))
-                .andExpect(jsonPath("$.observations[0].evidenceType").value("BASIC_MEDIA_FORENSICS"))
+                .andExpect(jsonPath("$.observations.length()").value(3))
+                .andExpect(jsonPath("$.observations[0].evidenceType").value("FILE_INTEGRITY"))
                 .andExpect(jsonPath("$.observations[0].payload.provider").value("ORIGINGUARD_INTERNAL"))
-                .andExpect(jsonPath("$.observations[0].payload.fileContentInspected").value(true))
-                .andExpect(jsonPath("$.observations[0].payload.allSha256MatchesRegistration").value(true))
-                .andExpect(jsonPath("$.observations[0].payload.findings[0].width").value(4))
-                .andExpect(jsonPath("$.observations[0].payload.findings[0].height").value(3))
-                .andExpect(jsonPath("$.checkpoints.length()").value(1))
-                .andExpect(jsonPath("$.checkpoints[0].state.remainingStepBudget").value(1));
+                .andExpect(jsonPath("$.observations[0].payload.allChecksPassed").value(true))
+                .andExpect(jsonPath("$.observations[1].evidenceType").value("IMAGE_METADATA"))
+                .andExpect(jsonPath("$.observations[1].payload.findings[0].width").value(4))
+                .andExpect(jsonPath("$.observations[1].payload.findings[0].height").value(3))
+                .andExpect(jsonPath("$.observations[2].evidenceType").value("PERCEPTUAL_SIMILARITY"))
+                .andExpect(jsonPath("$.observations[2].payload.comparisonCount").value(0))
+                .andExpect(jsonPath("$.checkpoints.length()").value(3))
+                .andExpect(jsonPath("$.checkpoints[2].state.remainingStepBudget").value(1));
 
         mockMvc.perform(get("/api/v1/agent-tasks/{id}", taskId)
                         .header("Authorization", bearer(reviewer)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.task.status").value("COMPLETED"))
-                .andExpect(jsonPath("$.steps.length()").value(7));
+                .andExpect(jsonPath("$.steps.length()").value(15));
 
         mockMvc.perform(get("/api/v1/cases/{id}/audit", caseId)
                         .header("Authorization", bearer(reviewer)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[*].action", hasItem("AGENT_TASK_CREATED")))
                 .andExpect(jsonPath("$[*].action", hasItem("AGENT_TASK_COMPLETED")));
+    }
+
+    @Test
+    void perceptualSimilaritySkillComparesEveryAssetPairDeterministically() throws Exception {
+        String investigator = token("investigator");
+        String leftAssetId = uploadAsset(investigator, png());
+        String rightAssetId = uploadAsset(investigator, png());
+        String caseId = createCase(investigator, "感知哈希比较", leftAssetId, rightAssetId);
+        transition(investigator, caseId, "READY", 0);
+        transition(investigator, caseId, "INVESTIGATING", 1);
+
+        MvcResult created = mockMvc.perform(post("/api/v1/agent-tasks")
+                        .header("Authorization", bearer(investigator))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"caseId":"%s","goal":"比较案件图片相似度","stepBudget":7}
+                                """.formatted(caseId)))
+                .andExpect(status().isCreated())
+                .andReturn();
+        String taskId = JsonPath.read(created.getResponse().getContentAsString(), "$.task.id");
+
+        mockMvc.perform(post("/api/v1/agent-tasks/{id}/run", taskId)
+                        .header("Authorization", bearer(investigator))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"version\":0}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.task.status").value("COMPLETED"))
+                .andExpect(jsonPath("$.observations[2].evidenceType").value("PERCEPTUAL_SIMILARITY"))
+                .andExpect(jsonPath("$.observations[2].payload.assetCount").value(2))
+                .andExpect(jsonPath("$.observations[2].payload.comparisonCount").value(1))
+                .andExpect(jsonPath("$.observations[2].payload.comparisons[0].hammingDistance").value(0))
+                .andExpect(jsonPath("$.observations[2].payload.comparisons[0].classification")
+                        .value("IDENTICAL_DHASH"));
     }
 
     @Test
@@ -129,7 +164,7 @@ class AgentHarnessIntegrationTests {
         String draftCaseId = createCase(investigator, "状态限制", assetId);
 
         String request = """
-                {"caseId":"%s","goal":"不应运行","stepBudget":3}
+                {"caseId":"%s","goal":"不应运行","stepBudget":7}
                 """.formatted(draftCaseId);
         mockMvc.perform(post("/api/v1/agent-tasks")
                         .header("Authorization", bearer(investigator))
@@ -152,7 +187,7 @@ class AgentHarnessIntegrationTests {
                         .header("Authorization", bearer(investigator))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"caseId":"%s","goal":"稍后取消","stepBudget":3}
+                                {"caseId":"%s","goal":"稍后取消","stepBudget":7}
                                 """.formatted(caseId)))
                 .andExpect(status().isCreated())
                 .andReturn();
@@ -238,12 +273,19 @@ class AgentHarnessIntegrationTests {
     }
 
     private String createCase(String token, String title, String assetId) throws Exception {
+        return createCase(token, title, new String[] {assetId});
+    }
+
+    private String createCase(String token, String title, String... assetIds) throws Exception {
+        String assetsJson = java.util.Arrays.stream(assetIds)
+                .map(id -> "\"" + id + "\"")
+                .collect(java.util.stream.Collectors.joining(","));
         MvcResult result = mockMvc.perform(post("/api/v1/cases")
                         .header("Authorization", bearer(token))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"title":"%s","description":"Agent test","priority":"NORMAL","assetIds":["%s"]}
-                                """.formatted(title, assetId)))
+                                {"title":"%s","description":"Agent test","priority":"NORMAL","assetIds":[%s]}
+                                """.formatted(title, assetsJson)))
                 .andExpect(status().isCreated())
                 .andReturn();
         return JsonPath.read(result.getResponse().getContentAsString(), "$.investigationCase.id");

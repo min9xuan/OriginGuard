@@ -184,15 +184,25 @@ public class AgentTaskRepository {
             UUID taskId,
             UUID caseId,
             UUID assetId,
+            String evidenceType,
             String summary,
             Map<String, ?> payload) {
+        int sequence = jdbcClient.sql("""
+                        SELECT COALESCE(max(sequence_number), 0) + 1
+                        FROM agent_observation WHERE tenant_id = :tenantId AND task_id = :taskId
+                        """)
+                .param("tenantId", tenantId)
+                .param("taskId", taskId)
+                .query(Integer.class)
+                .single();
         UUID id = UUID.randomUUID();
         jdbcClient.sql("""
                         INSERT INTO agent_observation(
-                            id, tenant_id, task_id, case_id, asset_id, evidence_type, summary, payload
+                            id, tenant_id, task_id, case_id, asset_id, sequence_number,
+                            evidence_type, summary, payload
                         ) VALUES (
-                            :id, :tenantId, :taskId, :caseId, :assetId,
-                            'BASIC_MEDIA_FORENSICS', :summary, CAST(:payload AS jsonb)
+                            :id, :tenantId, :taskId, :caseId, :assetId, :sequence,
+                            :evidenceType, :summary, CAST(:payload AS jsonb)
                         )
                         """)
                 .param("id", id)
@@ -200,6 +210,8 @@ public class AgentTaskRepository {
                 .param("taskId", taskId)
                 .param("caseId", caseId)
                 .param("assetId", assetId)
+                .param("sequence", sequence)
+                .param("evidenceType", evidenceType)
                 .param("summary", summary)
                 .param("payload", toJson(payload))
                 .update();
@@ -241,11 +253,11 @@ public class AgentTaskRepository {
 
     public List<AgentObservation> findObservations(UUID tenantId, UUID taskId) {
         return jdbcClient.sql("""
-                        SELECT id, task_id, case_id, asset_id, evidence_type, summary,
-                               payload::text AS payload, created_at
+            SELECT id, task_id, case_id, asset_id, evidence_type, summary,
+                   payload::text AS payload, created_at
                         FROM agent_observation
                         WHERE tenant_id = :tenantId AND task_id = :taskId
-                        ORDER BY created_at, id
+            ORDER BY sequence_number
                         """)
                 .param("tenantId", tenantId)
                 .param("taskId", taskId)

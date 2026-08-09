@@ -16,6 +16,7 @@ import com.originguard.investigation.infrastructure.InvestigationCaseRepository;
 import com.originguard.media.domain.MediaAsset;
 import com.originguard.shared.application.BusinessConflictException;
 import com.originguard.shared.application.ResourceNotFoundException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -118,92 +119,101 @@ public class AgentTaskService {
                             "assetCount", context.assets().size(),
                             "humanEvidenceCount", context.humanEvidenceCount()));
 
-            int remainingBudget = consumeBudget(running.remainingStepBudget());
-            FakePlanner.SkillSelection selection = planner.select(context, running.goal());
-            SkillDefinition skill = skillRegistry.require(selection.skillCode(), selection.skillVersion());
-            String toolCode = skill.allowedTools().iterator().next();
-            policyEngine.requireCanRun(actor, investigationCase, skill, toolCode);
-            repository.appendStep(
-                    actor.tenantId(), taskId, "SKILL_SELECTED", "SUCCEEDED",
-                    skill.code(), null,
-                    Map.of("goal", running.goal()),
-                    Map.of(
-                            "skillCode", skill.code(),
-                            "skillVersion", skill.version(),
-                            "planner", "FAKE",
-                            "reason", selection.reason()));
-
-            remainingBudget = consumeBudget(remainingBudget);
-            AgentTool tool = toolRegistry.require(toolCode);
-            Map<String, Object> toolInput = Map.of(
-                    "caseId", investigationCase.id().toString(),
-                    "assetIds", context.assets().stream().map(MediaAsset::id).map(UUID::toString).toList());
-            Map<String, Object> toolOutput = tool.execute(context, toolInput);
-            repository.appendStep(
-                    actor.tenantId(), taskId, "TOOL_CALLED", "SUCCEEDED",
-                    skill.code(), tool.code(), toolInput, toolOutput);
-
             MediaAsset primaryAsset = context.assets().stream().findFirst()
                     .orElseThrow(() -> new BusinessConflictException(
-                            "AGENT_ASSET_REQUIRED", "Agent metadata inspection requires a linked media asset"));
-            String summary = "已读取并检查 " + context.assets().size()
-                    + " 个媒体文件，完成魔数、解码、SHA-256、尺寸、EXIF 摘要和感知哈希检查。";
-            AgentObservation observation = repository.insertObservation(
-                    actor.tenantId(), taskId, investigationCase.id(), primaryAsset.id(), summary, toolOutput);
-            repository.appendStep(
-                    actor.tenantId(), taskId, "OBSERVATION_RECORDED", "SUCCEEDED",
-                    skill.code(), tool.code(),
-                    Map.of("toolCode", tool.code()),
-                    Map.of(
-                            "observationId", observation.id().toString(),
-                            "evidenceType", observation.evidenceType(),
-                            "summary", observation.summary()));
+                            "AGENT_ASSET_REQUIRED", "Deterministic analysis requires a linked media asset"));
+            List<FakePlanner.SkillSelection> plan = planner.plan(context, running.goal());
+            List<String> executedSkills = new ArrayList<>();
+            List<String> observationIds = new ArrayList<>();
+            int remainingBudget = running.remainingStepBudget();
+            long checkpointVersion = running.checkpointVersion();
 
-            long checkpointVersion = running.checkpointVersion() + 1;
-            repository.insertCheckpoint(
-                    actor.tenantId(), taskId, checkpointVersion,
-                    Map.of(
-                            "status", "OBSERVED",
-                            "selectedSkill", skill.code(),
-                            "selectedSkillVersion", skill.version(),
-                            "completedActions", List.of("CONTEXT_ASSEMBLED", "SKILL_SELECTED", "TOOL_CALLED"),
-                            "observationIds", List.of(observation.id().toString()),
-                            "remainingStepBudget", remainingBudget));
-            repository.appendStep(
-                    actor.tenantId(), taskId, "CHECKPOINT_SAVED", "SUCCEEDED",
-                    skill.code(), null,
-                    Map.of("checkpointVersion", checkpointVersion),
-                    Map.of("remainingStepBudget", remainingBudget));
+            for (FakePlanner.SkillSelection selection : plan) {
+                remainingBudget = consumeBudget(remainingBudget);
+                SkillDefinition skill = skillRegistry.require(selection.skillCode(), selection.skillVersion());
+                String toolCode = skill.allowedTools().iterator().next();
+                policyEngine.requireCanRun(actor, investigationCase, skill, toolCode);
+                repository.appendStep(
+                        actor.tenantId(), taskId, "SKILL_SELECTED", "SUCCEEDED",
+                        skill.code(), null,
+                        Map.of("goal", running.goal()),
+                        Map.of(
+                                "skillCode", skill.code(),
+                                "skillVersion", skill.version(),
+                                "planner", "FAKE",
+                                "reason", selection.reason(),
+                                "planPosition", executedSkills.size() + 1,
+                                "planSize", plan.size()));
+
+                remainingBudget = consumeBudget(remainingBudget);
+                AgentTool tool = toolRegistry.require(toolCode);
+                Map<String, Object> toolInput = Map.of(
+                        "caseId", investigationCase.id().toString(),
+                        "assetIds", context.assets().stream().map(MediaAsset::id).map(UUID::toString).toList());
+                Map<String, Object> toolOutput = tool.execute(context, toolInput);
+                repository.appendStep(
+                        actor.tenantId(), taskId, "TOOL_CALLED", "SUCCEEDED",
+                        skill.code(), tool.code(), toolInput, toolOutput);
+
+                AgentObservation observation = repository.insertObservation(
+                        actor.tenantId(), taskId, investigationCase.id(), primaryAsset.id(),
+                        evidenceTypeFor(skill.code()), summaryFor(skill.code(), context.assets().size()), toolOutput);
+                observationIds.add(observation.id().toString());
+                executedSkills.add(skill.code());
+                repository.appendStep(
+                        actor.tenantId(), taskId, "OBSERVATION_RECORDED", "SUCCEEDED",
+                        skill.code(), tool.code(),
+                        Map.of("toolCode", tool.code()),
+                        Map.of(
+                                "observationId", observation.id().toString(),
+                                "evidenceType", observation.evidenceType(),
+                                "summary", observation.summary()));
+
+                checkpointVersion++;
+                repository.insertCheckpoint(
+                        actor.tenantId(), taskId, checkpointVersion,
+                        Map.of(
+                                "status", "SKILL_COMPLETED",
+                                "completedSkills", List.copyOf(executedSkills),
+                                "observationIds", List.copyOf(observationIds),
+                                "remainingStepBudget", remainingBudget));
+                repository.appendStep(
+                        actor.tenantId(), taskId, "CHECKPOINT_SAVED", "SUCCEEDED",
+                        skill.code(), null,
+                        Map.of("checkpointVersion", checkpointVersion),
+                        Map.of("remainingStepBudget", remainingBudget));
+            }
 
             remainingBudget = consumeBudget(remainingBudget);
             Map<String, Object> conclusion = Map.of(
                     "verdict", "INCONCLUSIVE",
-                    "summary", "基础媒体取证已完成，文件内容与登记哈希已核验；尚无 AIGC 分类或篡改定位证据。",
-                    "observationIds", List.of(observation.id().toString()),
+                    "summary", "三个确定性 Skill 已完成文件完整性、图片元数据和感知相似度检查；这些事实不能单独证明媒体由 AI 生成。",
+                    "executedSkills", List.copyOf(executedSkills),
+                    "observationIds", List.copyOf(observationIds),
                     "limitations", List.of(
                             "C2PA verifier not configured",
                             "No AIGC classifier or manipulation localization model",
                             "No RAG evidence"));
             repository.appendStep(
                     actor.tenantId(), taskId, "CONCLUSION_SYNTHESIZED", "SUCCEEDED",
-                    skill.code(), null,
-                    Map.of("observationIds", List.of(observation.id().toString())), conclusion);
+                    FakePlanner.PLAN_CODE, null,
+                    Map.of("observationIds", List.copyOf(observationIds)), conclusion);
             if (!repository.complete(
-                    actor.tenantId(), taskId, running.version(), skill.code(), skill.version(),
+                    actor.tenantId(), taskId, running.version(), FakePlanner.PLAN_CODE, FakePlanner.PLAN_VERSION,
                     remainingBudget, checkpointVersion, conclusion)) {
                 throw new BusinessConflictException(
                         "AGENT_TASK_VERSION_CONFLICT", "Agent task changed while completing");
             }
             repository.appendStep(
                     actor.tenantId(), taskId, "TASK_COMPLETED", "SUCCEEDED",
-                    skill.code(), null, Map.of(), Map.of("status", "COMPLETED"));
+                    FakePlanner.PLAN_CODE, null, Map.of(), Map.of("status", "COMPLETED"));
             auditService.record(
                     actor.tenantId(),
                     actor.userId(),
                     "AGENT_TASK_COMPLETED",
                     InvestigationCaseService.RESOURCE_TYPE,
                     investigationCase.id(),
-                    Map.of("agentTaskId", taskId.toString(), "skillCode", skill.code()));
+                    Map.of("agentTaskId", taskId.toString(), "executedSkills", List.copyOf(executedSkills)));
         } catch (RuntimeException exception) {
             repository.appendStep(
                     actor.tenantId(), taskId, "TASK_FAILED", "FAILED", null, null,
@@ -248,6 +258,24 @@ public class AgentTaskService {
                     "AGENT_STEP_BUDGET_EXHAUSTED", "Agent step budget was exhausted");
         }
         return remaining - 1;
+    }
+
+    private String evidenceTypeFor(String skillCode) {
+        return switch (skillCode) {
+            case SkillRegistry.INTEGRITY_SKILL -> "FILE_INTEGRITY";
+            case SkillRegistry.METADATA_SKILL -> "IMAGE_METADATA";
+            case SkillRegistry.SIMILARITY_SKILL -> "PERCEPTUAL_SIMILARITY";
+            default -> throw new IllegalArgumentException("No evidence type for skill: " + skillCode);
+        };
+    }
+
+    private String summaryFor(String skillCode, int assetCount) {
+        return switch (skillCode) {
+            case SkillRegistry.INTEGRITY_SKILL -> "已对 " + assetCount + " 个媒体文件完成 SHA-256、字节数与 MIME 完整性核验。";
+            case SkillRegistry.METADATA_SKILL -> "已对 " + assetCount + " 个图片完成格式、尺寸与 EXIF 摘要提取。";
+            case SkillRegistry.SIMILARITY_SKILL -> "已对案件内 " + assetCount + " 个图片完成 dHash 感知相似度比较。";
+            default -> throw new IllegalArgumentException("No summary for skill: " + skillCode);
+        };
     }
 
     private AgentTaskDetails details(UUID tenantId, UUID taskId) {

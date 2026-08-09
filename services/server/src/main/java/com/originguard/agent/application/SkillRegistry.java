@@ -11,20 +11,29 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class SkillRegistry {
-    public static final String METADATA_SKILL = "inspect_media_content";
-    public static final String METADATA_SKILL_VERSION = "1.0.0";
+    public static final String INTEGRITY_SKILL = "verify_media_integrity";
+    public static final String METADATA_SKILL = "extract_image_metadata";
+    public static final String SIMILARITY_SKILL = "compare_perceptual_similarity";
+    public static final String SKILL_VERSION = "1.0.0";
 
     private final Map<String, SkillDefinition> skills;
 
     public SkillRegistry() {
-        List<SkillDefinition> definitions = List.of(new SkillDefinition(
-                METADATA_SKILL,
-                METADATA_SKILL_VERSION,
-                "Read stored media bytes and produce a basic forensic observation",
-                Set.of("agent:run", "asset:read", "case:read"),
-                Set.of(CaseStatus.INVESTIGATING),
-                Set.of(BasicMediaForensicsTool.CODE),
-                3));
+        Set<String> permissions = Set.of("agent:run", "asset:read", "case:read");
+        Set<CaseStatus> statuses = Set.of(CaseStatus.INVESTIGATING);
+        List<SkillDefinition> definitions = List.of(
+                new SkillDefinition(
+                        INTEGRITY_SKILL, SKILL_VERSION,
+                        "Verify stored bytes against registered size, MIME and SHA-256",
+                        permissions, statuses, Set.of(MediaIntegrityTool.CODE), 2),
+                new SkillDefinition(
+                        METADATA_SKILL, SKILL_VERSION,
+                        "Extract deterministic image dimensions, format and EXIF metadata",
+                        permissions, statuses, Set.of(ImageMetadataTool.CODE), 2),
+                new SkillDefinition(
+                        SIMILARITY_SKILL, SKILL_VERSION,
+                        "Compare 64-bit difference hashes for media linked to the same case",
+                        permissions, statuses, Set.of(PerceptualSimilarityTool.CODE), 2));
         skills = definitions.stream().collect(Collectors.toUnmodifiableMap(
                 SkillDefinition::code, Function.identity()));
     }
