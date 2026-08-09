@@ -192,7 +192,7 @@ public class AgentTaskRepository {
                             id, tenant_id, task_id, case_id, asset_id, evidence_type, summary, payload
                         ) VALUES (
                             :id, :tenantId, :taskId, :caseId, :assetId,
-                            'MEDIA_METADATA', :summary, CAST(:payload AS jsonb)
+                            'BASIC_MEDIA_FORENSICS', :summary, CAST(:payload AS jsonb)
                         )
                         """)
                 .param("id", id)

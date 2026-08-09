@@ -108,6 +108,8 @@ button, input, textarea, select { font: inherit; }
 .asset-card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
 .asset-card { display: grid; gap: 8px; padding: 18px; border: 1px solid #263f49; border-radius: 12px; background: #0a161c; }
 .asset-card span { color: #78909a; font-size: 12px; }
+.asset-card small { color: #78909a; }
+.media-preview-image { display: block; max-width: 100%; max-height: 72vh; margin: 0 auto; object-fit: contain; }
 .audit-list { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
 .audit-list li { display: grid; grid-template-columns: 180px 210px minmax(0, 1fr); gap: 14px; padding: 14px 0; border-bottom: 1px solid #1e343d; align-items: center; }
 .audit-list span { color: #78909a; font-size: 12px; }

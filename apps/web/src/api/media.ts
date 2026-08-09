@@ -1,5 +1,5 @@
 import type { MediaAsset, RegisterAssetRequest } from '../types/business'
-import { apiRequest } from './http'
+import { apiBlobRequest, apiRequest } from './http'
 
 export const mediaApi = {
   list(accessToken: string) {
@@ -11,5 +11,14 @@ export const mediaApi = {
       { method: 'POST', body: JSON.stringify(request) },
       accessToken,
     )
+  },
+  upload(file: File, sha256: string, accessToken: string) {
+    const body = new FormData()
+    body.append('file', file)
+    body.append('sha256', sha256)
+    return apiRequest<MediaAsset>('/assets/upload', { method: 'POST', body }, accessToken)
+  },
+  content(assetId: string, accessToken: string) {
+    return apiBlobRequest(`/assets/${assetId}/content`, accessToken)
   },
 }

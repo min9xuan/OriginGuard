@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus'
-import { onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { mediaApi } from '../api/media'
 import { ApiRequestError } from '../api/http'
 import { useAuthStore } from '../stores/auth'
@@ -15,6 +15,10 @@ const hashing = ref(false)
 const registering = ref(false)
 const selectedFile = ref<File | null>(null)
 const draft = ref<RegisterAssetRequest | null>(null)
+const previewUrl = ref('')
+const previewName = ref('')
+const previewVisible = ref(false)
+const previewLoading = ref(false)
 
 async function load() {
   loading.value = true
@@ -49,11 +53,11 @@ async function selectFile(event: Event) {
 }
 
 async function register() {
-  if (!draft.value) return
+  if (!draft.value || !selectedFile.value) return
   registering.value = true
   try {
-    await mediaApi.register(draft.value, auth.accessToken)
-    ElMessage.success('媒体记录已登记')
+    await mediaApi.upload(selectedFile.value, draft.value.sha256, auth.accessToken)
+    ElMessage.success('媒体文件已安全存储并完成服务端基础检查')
     selectedFile.value = null
     draft.value = null
     await load()
@@ -64,11 +68,29 @@ async function register() {
   }
 }
 
+async function preview(asset: MediaAsset) {
+  if (asset.storageStatus !== 'STORED') return
+  previewLoading.value = true
+  try {
+    if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
+    previewUrl.value = URL.createObjectURL(await mediaApi.content(asset.id, auth.accessToken))
+    previewName.value = asset.originalFilename
+    previewVisible.value = true
+  } catch (error) {
+    showError(error)
+  } finally {
+    previewLoading.value = false
+  }
+}
+
 function showError(error: unknown) {
   ElMessage.error(error instanceof ApiRequestError ? error.message : '请求失败，请稍后重试')
 }
 
 onMounted(load)
+onBeforeUnmount(() => {
+  if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
+})
 </script>
 
 <template>
@@ -77,15 +99,15 @@ onMounted(load)
       <div>
         <p class="eyebrow">MEDIA REGISTRY</p>
         <h1>媒体资产记录</h1>
-        <p>M1.1 只登记文件指纹与元数据，不会上传或保存文件内容。</p>
+        <p>M3.1 将 JPEG/PNG 原文件存入 MinIO，并由服务端复核文件签名、解码与 SHA-256。</p>
       </div>
-      <el-tag type="warning" effect="plain">Metadata only</el-tag>
+      <el-tag type="success" effect="plain">Stored & verified</el-tag>
     </header>
 
     <section v-if="auth.hasPermission('asset:upload')" class="panel register-panel">
       <div>
         <h2>选择本地图片</h2>
-        <p>SHA-256 在浏览器本地计算，后端按租户去重。</p>
+        <p>浏览器预计算 SHA-256；后端读取真实字节再次计算并校验，单文件最大 25 MB。</p>
       </div>
       <label class="file-picker">
         <input type="file" accept="image/*" @change="selectFile" />
@@ -117,7 +139,22 @@ onMounted(load)
         <el-table-column label="登记时间" width="180">
           <template #default="scope">{{ formatDate(scope.row.createdAt) }}</template>
         </el-table-column>
+        <el-table-column label="内容" width="100">
+          <template #default="scope">
+            <el-button
+              text
+              type="primary"
+              :disabled="scope.row.storageStatus !== 'STORED'"
+              :loading="previewLoading"
+              @click.stop="preview(scope.row)"
+            >预览</el-button>
+          </template>
+        </el-table-column>
       </el-table>
     </section>
+
+    <el-dialog v-model="previewVisible" :title="previewName" width="min(880px, 92vw)">
+      <img v-if="previewUrl" class="media-preview-image" :src="previewUrl" :alt="previewName" />
+    </el-dialog>
   </main>
 </template>

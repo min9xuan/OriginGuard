@@ -8,7 +8,7 @@ public class FakePlanner {
         return new SkillSelection(
                 SkillRegistry.METADATA_SKILL,
                 SkillRegistry.METADATA_SKILL_VERSION,
-                "M2.1 deterministic planner always starts with registered media metadata inspection");
+                "M3.1 deterministic planner always starts with controlled basic media forensics");
     }
 
     public record SkillSelection(String skillCode, String skillVersion, String reason) {}

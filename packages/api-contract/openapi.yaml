@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: OriginGuard API
-  version: 0.4.0
-  description: M2.1 contract including a deterministic, permission-bound Agent Harness vertical slice with persisted Trace and Checkpoint.
+  version: 0.5.0
+  description: M3.1 contract with MinIO-backed media upload, authorized content access, and real basic media forensics inside the deterministic Agent Harness.
 servers:
   - url: http://localhost:8080
 paths:
@@ -122,6 +122,49 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/MediaAsset' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/assets/upload:
+    post:
+      operationId: uploadMediaAsset
+      tags: [Media]
+      description: Stores JPEG or PNG bytes, verifies browser/server SHA-256, validates file signature and decoding, and persists basic forensic metadata.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, sha256]
+              properties:
+                file: { type: string, format: binary }
+                sha256: { type: string, pattern: '^[0-9a-fA-F]{64}$' }
+      responses:
+        '201':
+          description: Media bytes stored and verified
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MediaAsset' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+  /api/v1/assets/{assetId}/content:
+    parameters:
+      - $ref: '#/components/parameters/AssetId'
+    get:
+      operationId: getMediaContent
+      tags: [Media]
+      description: Returns tenant-scoped stored media bytes after asset:read authorization.
+      responses:
+        '200':
+          description: Original verified media content
+          headers:
+            Content-Disposition: { schema: { type: string } }
+            X-Content-Type-Options: { schema: { type: string, const: nosniff } }
+          content:
+            image/png: { schema: { type: string, format: binary } }
+            image/jpeg: { schema: { type: string, format: binary } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/v1/cases:
     get:
       operationId: listInvestigationCases
@@ -758,7 +801,7 @@ components:
         taskId: { type: string, format: uuid }
         caseId: { type: string, format: uuid }
         assetId: { type: [string, 'null'], format: uuid }
-        evidenceType: { type: string, enum: [MEDIA_METADATA] }
+        evidenceType: { type: string, enum: [MEDIA_METADATA, BASIC_MEDIA_FORENSICS] }
         summary: { type: string }
         payload: { type: object, additionalProperties: true }
         createdAt: { type: string, format: date-time }

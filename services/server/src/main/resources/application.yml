@@ -10,6 +10,10 @@ spring:
   flyway:
     enabled: true
     locations: classpath:db/migration
+  servlet:
+    multipart:
+      max-file-size: 25MB
+      max-request-size: 26MB
 
 server:
   port: ${SERVER_PORT:8080}
@@ -33,3 +37,9 @@ originguard:
       access-token-ttl: ${ACCESS_TOKEN_TTL:PT15M}
       refresh-token-ttl: ${REFRESH_TOKEN_TTL:P7D}
       refresh-cookie-secure: ${REFRESH_COOKIE_SECURE:true}
+  storage:
+    endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+    access-key: ${MINIO_ROOT_USER:originguard}
+    secret-key: ${MINIO_ROOT_PASSWORD:change-me-now}
+    bucket: ${MINIO_BUCKET:originguard-media}
+    max-upload-bytes: ${MEDIA_MAX_UPLOAD_BYTES:26214400}

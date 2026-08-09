@@ -146,8 +146,8 @@ public class AgentTaskService {
             MediaAsset primaryAsset = context.assets().stream().findFirst()
                     .orElseThrow(() -> new BusinessConflictException(
                             "AGENT_ASSET_REQUIRED", "Agent metadata inspection requires a linked media asset"));
-            String summary = "已检查 " + context.assets().size()
-                    + " 条媒体登记信息；当前 Mock Tool 未读取文件内容，不能据此判断是否为 AI 生成。";
+            String summary = "已读取并检查 " + context.assets().size()
+                    + " 个媒体文件，完成魔数、解码、SHA-256、尺寸、EXIF 摘要和感知哈希检查。";
             AgentObservation observation = repository.insertObservation(
                     actor.tenantId(), taskId, investigationCase.id(), primaryAsset.id(), summary, toolOutput);
             repository.appendStep(
@@ -178,12 +178,12 @@ public class AgentTaskService {
             remainingBudget = consumeBudget(remainingBudget);
             Map<String, Object> conclusion = Map.of(
                     "verdict", "INCONCLUSIVE",
-                    "summary", "M2.1 Harness 已完成媒体元数据检查，但尚未接入文件内容和真实检测工具。",
+                    "summary", "基础媒体取证已完成，文件内容与登记哈希已核验；尚无 AIGC 分类或篡改定位证据。",
                     "observationIds", List.of(observation.id().toString()),
                     "limitations", List.of(
-                            "Mock Tool only",
-                            "File bytes unavailable",
-                            "No model or RAG evidence"));
+                            "C2PA verifier not configured",
+                            "No AIGC classifier or manipulation localization model",
+                            "No RAG evidence"));
             repository.appendStep(
                     actor.tenantId(), taskId, "CONCLUSION_SYNTHESIZED", "SUCCEEDED",
                     skill.code(), null,

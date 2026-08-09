@@ -2,7 +2,7 @@
 
 OriginGuard 是一个面向内容审核与数字取证场景的 AIGC 内容真实性检测、篡改分析和来源溯源平台。
 
-> 当前状态：M0、M1.1、M1.2 与 M2.1 已完成；业务闭环之上已有可运行、可审计的 Agent Harness 最小纵向切片。文件存储、RAG、真实 Planner/Tools/模型和报告归档尚未接入。
+> 当前状态：M3.1 已完成；JPEG/PNG 可真实存入 MinIO，Fake Planner 已通过受控基础取证 Tool 读取媒体字节并生成可追踪 Observation。RAG、真实 Planner、C2PA、检测模型和报告归档尚未接入。
 
 ## 当前包含
 
@@ -14,14 +14,15 @@ OriginGuard 是一个面向内容审核与数字取证场景的 AIGC 内容真�
 - 架构决策记录（ADR）和基础 CI
 - Spring Security、JWT Access Token、HttpOnly Refresh Cookie 轮换
 - 调查员、审核员、管理员三角色权限与租户上下文
-- 媒体元数据与 SHA-256 指纹登记（M1.1 不上传文件内容）
+- JPEG/PNG multipart 上传、MinIO 对象存储、租户授权预览和服务端 SHA-256 复核
+- MIME/魔数校验、图片解码、40MP 安全限制、尺寸、EXIF 摘要和 64 位感知 dHash
 - 调查案件创建、列表、详情、编辑和媒体关联
 - `DRAFT → READY → INVESTIGATING → WAITING_REVIEW` 状态推进
 - 管理员分派调查员和独立审核员，且不拥有审核决定权限
 - 调查员针对案件媒体追加人工观察证据
 - 审核任务自动创建，审核员通过或驳回后进入 `CONFIRMED` / `REJECTED`
 - 案件乐观锁、租户范围查询和追加式审计时间线
-- `AgentTask → Context Builder → Fake Planner → Skill → Mock Tool → Observation → Checkpoint → Trace` 完整链路
+- `AgentTask → Context Builder → Fake Planner → Skill → Real Media Tool → Observation → Checkpoint → Trace` 完整链路
 - 版本化 Skill、Tool 白名单、权限/案件状态策略和 Step Budget
 - Agent 任务列表、结构化结论、Observation、Checkpoint 与逐步 Trace 页面
 
@@ -106,12 +107,12 @@ investigator → 针对关联媒体追加人工证据 → 提交人工审核
 reviewer → 查看证据与审核任务 → 通过或填写理由驳回
 ```
 
-当前只保存文件名、MIME、大小和 SHA-256，文件内容不会离开浏览器。MinIO 分片上传、文件安全检查、EXIF 和 C2PA 属于后续媒体取证阶段。
+新上传的 JPEG/PNG 会存入 MinIO，并可在媒体列表和案件详情中授权预览。旧版 `REGISTERED` 记录没有对应文件内容，仍会显示为不可预览。当前单文件上限 25 MB；C2PA、恶意文件扫描、视频和分片上传仍属于后续阶段。
 
 管理员可以查看和分派案件，但不能创建、调查或作出审核决定；审核员只能决定分派给自己的任务，并禁止审核自己创建或调查的案件。详细边界见 [M1.2 实现说明](docs/product/m1.2-evidence-review-workflow.md)。
 
-## M2.1 Agent Harness 使用流程
+## M3.1 基础媒体取证 Agent 使用流程
 
-调查员将已分派给自己的案件推进到 `INVESTIGATING`，然后在案件详情点击“运行 M2.1 Agent”。任务会同步执行一个确定性流程，并跳转到 Trace 页面。具有 `agent:trace:read` 权限的用户也可从“Agent 任务”导航查看租户内任务。
+调查员先上传新的 JPEG/PNG 媒体并关联案件，将已分派给自己的案件推进到 `INVESTIGATING`，然后点击“运行基础取证 Agent”。任务会同步执行确定性流程并跳转到 Trace 页面。具有 `agent:trace:read` 权限的用户也可从“Agent 任务”导航查看租户内任务。
 
-当前 Mock Tool 只读取数据库中已登记的媒体文件名、MIME、大小和 SHA-256，不读取媒体字节；结论固定为 `INCONCLUSIVE`，用来验证 Harness 的生命周期、权限、预算和持久化边界，不代表已具备真实性检测能力。实现说明见 [M2.1 Agent Harness 最小纵向切片](docs/product/m2.1-agent-harness-vertical-slice.md)。
+Fake Planner 仍固定选择一个 Skill，但 `media.inspect_basic_forensics` 会从 MinIO 读取真实字节，重新计算 SHA-256、校验 MIME/解码、提取尺寸和有限 EXIF、计算 dHash。由于尚无 AIGC 分类或篡改定位模型，真实性结论仍为 `INCONCLUSIVE`。实现说明见 [M3.1 真实媒体与基础取证 Tool](docs/product/m3.1-real-media-forensics.md)。

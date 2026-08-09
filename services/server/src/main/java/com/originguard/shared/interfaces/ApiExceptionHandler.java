@@ -12,6 +12,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
@@ -50,6 +51,12 @@ public class ApiExceptionHandler {
     ResponseEntity<ApiError> conflict(BusinessConflictException exception) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(new ApiError(exception.code(), exception.getMessage(), Instant.now()));
+    }
+
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    ResponseEntity<ApiError> uploadTooLarge(MaxUploadSizeExceededException exception) {
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+                .body(new ApiError("MEDIA_TOO_LARGE", "Media exceeds the 25 MB upload limit", Instant.now()));
     }
 
     public record ApiError(String code, String message, Instant timestamp) {}

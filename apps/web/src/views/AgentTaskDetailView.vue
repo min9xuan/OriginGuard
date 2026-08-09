@@ -36,7 +36,7 @@ async function run() {
   mutating.value = true
   try {
     details.value = await agentApi.run(taskId, details.value.task.version, auth.accessToken)
-    ElMessage.success('M2.1 Agent 任务已完成')
+    ElMessage.success('基础媒体取证 Agent 任务已完成')
   } catch (error) {
     showError(error)
     await load()
@@ -89,7 +89,7 @@ onMounted(load)
       </section>
 
       <section v-if="canOperate" class="panel agent-actions">
-        <div><h2>执行任务</h2><p>本轮同步执行一个确定性 Skill，不调用真实 LLM 或模型。</p></div>
+        <div><h2>执行任务</h2><p>本轮使用 Fake Planner，但 Tool 会读取 MinIO 中的真实媒体文件；尚不调用 LLM 或检测模型。</p></div>
         <div><el-button type="primary" :loading="mutating" @click="run">运行 Agent</el-button><el-button :loading="mutating" @click="cancel">取消</el-button></div>
       </section>
 

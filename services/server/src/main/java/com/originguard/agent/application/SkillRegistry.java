@@ -11,7 +11,7 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class SkillRegistry {
-    public static final String METADATA_SKILL = "inspect_media_metadata";
+    public static final String METADATA_SKILL = "inspect_media_content";
     public static final String METADATA_SKILL_VERSION = "1.0.0";
 
     private final Map<String, SkillDefinition> skills;
@@ -20,10 +20,10 @@ public class SkillRegistry {
         List<SkillDefinition> definitions = List.of(new SkillDefinition(
                 METADATA_SKILL,
                 METADATA_SKILL_VERSION,
-                "Inspect registered media metadata and produce a structured observation",
+                "Read stored media bytes and produce a basic forensic observation",
                 Set.of("agent:run", "asset:read", "case:read"),
                 Set.of(CaseStatus.INVESTIGATING),
-                Set.of(MockMetadataTool.CODE),
+                Set.of(BasicMediaForensicsTool.CODE),
                 3));
         skills = definitions.stream().collect(Collectors.toUnmodifiableMap(
                 SkillDefinition::code, Function.identity()));

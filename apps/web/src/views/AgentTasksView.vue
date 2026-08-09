@@ -37,9 +37,9 @@ onMounted(load)
       <div>
         <p class="eyebrow">AGENT HARNESS</p>
         <h1>Agent 任务与 Trace</h1>
-        <p>M2.1 使用 Fake Planner、版本化 Skill 和 Mock Tool 验证完整 Harness 生命周期。</p>
+        <p>M3.1 保留 Fake Planner，通过受控 Tool 读取 MinIO 中的真实媒体并保存完整 Trace。</p>
       </div>
-      <el-tag type="warning" effect="plain">Deterministic M2.1</el-tag>
+      <el-tag type="success" effect="plain">Deterministic + Real Tool</el-tag>
     </header>
 
     <section class="panel table-panel">

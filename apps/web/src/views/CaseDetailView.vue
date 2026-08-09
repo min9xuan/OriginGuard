@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus'
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { agentApi } from '../api/agents'
 import { caseApi } from '../api/cases'
@@ -44,6 +44,10 @@ const evidence = reactive({
   confidence: 'MEDIUM' as EvidenceConfidence,
 })
 const review = reactive({ decision: 'APPROVED' as ReviewStatus, reason: '' })
+const previewUrl = ref('')
+const previewName = ref('')
+const previewVisible = ref(false)
+const previewLoadingId = ref('')
 
 const current = computed(() => details.value?.investigationCase ?? null)
 const canOperate = computed(() => {
@@ -178,17 +182,32 @@ async function startAgent() {
   try {
     const created = await agentApi.create(
       caseId,
-      '检查案件媒体元数据并形成可追踪证据',
+      '读取案件媒体文件并完成基础取证检查',
       3,
       auth.accessToken,
     )
     const completed = await agentApi.run(created.task.id, created.task.version, auth.accessToken)
-    ElMessage.success('M2.1 Agent 任务已完成，可查看完整 Trace')
+    ElMessage.success('基础媒体取证 Agent 已完成，可查看完整 Trace')
     await router.push(`/agent-tasks/${completed.task.id}`)
   } catch (error) {
     showError(error)
   } finally {
     saving.value = false
+  }
+}
+
+async function previewAsset(asset: Pick<MediaAsset, 'id' | 'originalFilename' | 'storageStatus'>) {
+  if (asset.storageStatus !== 'STORED') return
+  previewLoadingId.value = asset.id
+  try {
+    if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
+    previewUrl.value = URL.createObjectURL(await mediaApi.content(asset.id, auth.accessToken))
+    previewName.value = asset.originalFilename
+    previewVisible.value = true
+  } catch (error) {
+    showError(error)
+  } finally {
+    previewLoadingId.value = ''
   }
 }
 
@@ -241,6 +260,9 @@ function showError(error: unknown) {
 }
 
 onMounted(load)
+onBeforeUnmount(() => {
+  if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
+})
 </script>
 
 <template>
@@ -280,7 +302,7 @@ onMounted(load)
             {{ nextTransition.label }}
           </el-button>
           <el-button v-if="canRunAgent" type="success" :loading="saving" @click="startAgent">
-            运行 M2.1 Agent
+            运行基础取证 Agent
           </el-button>
           <small v-if="!nextTransition && !canRunAgent">当前身份或状态没有可执行的状态推进操作。</small>
         </article>
@@ -320,6 +342,13 @@ onMounted(load)
             <strong>{{ asset.originalFilename }}</strong>
             <span>{{ asset.contentType }} · {{ formatBytes(asset.byteSize) }}</span>
             <code>{{ asset.sha256 }}</code>
+            <el-button
+              v-if="asset.storageStatus === 'STORED'"
+              plain
+              :loading="previewLoadingId === asset.id"
+              @click="previewAsset(asset)"
+            >查看原始媒体</el-button>
+            <small v-else>旧版仅登记元数据，尚无可预览文件</small>
           </article>
         </div>
         <el-empty v-else description="尚未关联媒体，案件不能进入 READY" />
@@ -391,6 +420,10 @@ onMounted(load)
           </li>
         </ol>
       </section>
+
+      <el-dialog v-model="previewVisible" :title="previewName" width="min(880px, 92vw)">
+        <img v-if="previewUrl" class="media-preview-image" :src="previewUrl" :alt="previewName" />
+      </el-dialog>
     </template>
   </main>
 </template>

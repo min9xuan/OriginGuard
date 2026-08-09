@@ -2,22 +2,35 @@ package com.originguard.agent;
 
 import static org.hamcrest.Matchers.hasItem;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 
 import com.jayway.jsonpath.JsonPath;
+import java.awt.Color;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 import java.util.UUID;
+import javax.imageio.ImageIO;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.mock.web.MockMultipartFile;
+import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
@@ -33,11 +46,28 @@ class AgentHarnessIntegrationTests {
     static final PostgreSQLContainer<?> POSTGRES =
             new PostgreSQLContainer<>("pgvector/pgvector:pg16");
 
+    @Container
+    static final GenericContainer<?> MINIO = new GenericContainer<>("minio/minio:latest")
+            .withEnv("MINIO_ROOT_USER", "originguard")
+            .withEnv("MINIO_ROOT_PASSWORD", "change-me-now")
+            .withCommand("server", "/data")
+            .withExposedPorts(9000)
+            .waitingFor(Wait.forHttp("/minio/health/live").forPort(9000));
+
+    @DynamicPropertySource
+    static void storageProperties(DynamicPropertyRegistry registry) {
+        registry.add("originguard.storage.endpoint",
+                () -> "http://" + MINIO.getHost() + ":" + MINIO.getMappedPort(9000));
+        registry.add("originguard.storage.access-key", () -> "originguard");
+        registry.add("originguard.storage.secret-key", () -> "change-me-now");
+        registry.add("originguard.storage.bucket", () -> "agent-test-media");
+    }
+
     @Autowired
     MockMvc mockMvc;
 
     @Test
-    void fakePlannerSkillMockToolCheckpointAndTraceCompleteVerticalSlice() throws Exception {
+    void fakePlannerRealMediaToolCheckpointAndTraceCompleteVerticalSlice() throws Exception {
         String investigator = token("investigator");
         String reviewer = token("reviewer");
         String caseId = investigatingCase(investigator, "Agent Harness 纵向切片");
@@ -46,7 +76,7 @@ class AgentHarnessIntegrationTests {
                         .header("Authorization", bearer(investigator))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"caseId":"%s","goal":"检查案件媒体元数据并形成证据","stepBudget":3}
+                                {"caseId":"%s","goal":"读取案件媒体并完成基础取证","stepBudget":3}
                                 """.formatted(caseId)))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.task.status").value("PENDING"))
@@ -60,7 +90,7 @@ class AgentHarnessIntegrationTests {
                         .content("{\"version\":0}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.task.status").value("COMPLETED"))
-                .andExpect(jsonPath("$.task.selectedSkillCode").value("inspect_media_metadata"))
+                .andExpect(jsonPath("$.task.selectedSkillCode").value("inspect_media_content"))
                 .andExpect(jsonPath("$.task.selectedSkillVersion").value("1.0.0"))
                 .andExpect(jsonPath("$.task.remainingStepBudget").value(0))
                 .andExpect(jsonPath("$.task.checkpointVersion").value(1))
@@ -69,9 +99,12 @@ class AgentHarnessIntegrationTests {
                 .andExpect(jsonPath("$.steps[*].stepType", hasItem("TOOL_CALLED")))
                 .andExpect(jsonPath("$.steps[*].stepType", hasItem("CHECKPOINT_SAVED")))
                 .andExpect(jsonPath("$.observations.length()").value(1))
-                .andExpect(jsonPath("$.observations[0].evidenceType").value("MEDIA_METADATA"))
-                .andExpect(jsonPath("$.observations[0].payload.provider").value("MOCK"))
-                .andExpect(jsonPath("$.observations[0].payload.fileContentInspected").value(false))
+                .andExpect(jsonPath("$.observations[0].evidenceType").value("BASIC_MEDIA_FORENSICS"))
+                .andExpect(jsonPath("$.observations[0].payload.provider").value("ORIGINGUARD_INTERNAL"))
+                .andExpect(jsonPath("$.observations[0].payload.fileContentInspected").value(true))
+                .andExpect(jsonPath("$.observations[0].payload.allSha256MatchesRegistration").value(true))
+                .andExpect(jsonPath("$.observations[0].payload.findings[0].width").value(4))
+                .andExpect(jsonPath("$.observations[0].payload.findings[0].height").value(3))
                 .andExpect(jsonPath("$.checkpoints.length()").value(1))
                 .andExpect(jsonPath("$.checkpoints[0].state.remainingStepBudget").value(1));
 
@@ -141,6 +174,29 @@ class AgentHarnessIntegrationTests {
                 .andExpect(jsonPath("$.code").value("AGENT_TASK_VERSION_CONFLICT"));
     }
 
+    @Test
+    void uploadRejectsSpoofedBytesAndAuthorizedReaderGetsStoredContent() throws Exception {
+        String investigator = token("investigator");
+        MockMultipartFile spoofed = new MockMultipartFile(
+                "file", "spoofed.png", "image/png", "not-an-image".getBytes());
+        String spoofedSha = HexFormat.of().formatHex(
+                MessageDigest.getInstance("SHA-256").digest(spoofed.getBytes()));
+        mockMvc.perform(multipart("/api/v1/assets/upload")
+                        .header("Authorization", bearer(investigator))
+                        .file(spoofed)
+                        .param("sha256", spoofedSha))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("MEDIA_CONTENT_INVALID"));
+
+        byte[] content = png();
+        String assetId = uploadAsset(investigator, content);
+        mockMvc.perform(get("/api/v1/assets/{id}/content", assetId)
+                        .header("Authorization", bearer(investigator)))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType("image/png"))
+                .andExpect(content().bytes(content));
+    }
+
     private String investigatingCase(String token, String title) throws Exception {
         String assetId = registerAsset(token);
         String caseId = createCase(token, title, assetId);
@@ -150,17 +206,35 @@ class AgentHarnessIntegrationTests {
     }
 
     private String registerAsset(String token) throws Exception {
-        String sha = UUID.randomUUID().toString().replace("-", "")
-                + UUID.randomUUID().toString().replace("-", "");
-        MvcResult result = mockMvc.perform(post("/api/v1/assets")
+        return uploadAsset(token, png());
+    }
+
+    private String uploadAsset(String token, byte[] content) throws Exception {
+        String sha = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(content));
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "agent.png", "image/png", content);
+        MvcResult result = mockMvc.perform(multipart("/api/v1/assets/upload")
                         .header("Authorization", bearer(token))
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"originalFilename":"agent.png","contentType":"image/png","byteSize":2048,"sha256":"%s"}
-                                """.formatted(sha)))
+                        .file(file)
+                        .param("sha256", sha))
                 .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.storageStatus").value("STORED"))
                 .andReturn();
         return JsonPath.read(result.getResponse().getContentAsString(), "$.id");
+    }
+
+    private byte[] png() throws Exception {
+        BufferedImage image = new BufferedImage(4, 3, BufferedImage.TYPE_INT_RGB);
+        var graphics = image.createGraphics();
+        try {
+            graphics.setColor(new Color(UUID.randomUUID().hashCode() & 0x00ffffff));
+            graphics.fillRect(0, 0, 4, 3);
+        } finally {
+            graphics.dispose();
+        }
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        ImageIO.write(image, "png", output);
+        return output.toByteArray();
     }
 
     private String createCase(String token, String title, String assetId) throws Exception {

@@ -82,6 +82,17 @@ public class MediaAssetRepository {
                 .list();
     }
 
+    public void markStored(UUID tenantId, UUID id) {
+        int updated = jdbcClient.sql("""
+                        UPDATE media_asset SET storage_status = 'STORED'
+                        WHERE tenant_id = :tenantId AND id = :id AND storage_status = 'REGISTERED'
+                        """)
+                .param("tenantId", tenantId)
+                .param("id", id)
+                .update();
+        if (updated != 1) throw new IllegalStateException("Unable to mark media asset as stored");
+    }
+
     private MediaAsset map(ResultSet rs, int rowNum) throws SQLException {
         return new MediaAsset(
                 rs.getObject("id", UUID.class),
