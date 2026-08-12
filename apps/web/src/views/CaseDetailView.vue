@@ -27,7 +27,7 @@ const route = useRoute()
 const router = useRouter()
 const caseId = route.params.caseId as string
 const details = ref<CaseDetails | null>(null)
-const workflow = ref<CaseWorkflow>({ evidence: [], reviewTasks: [] })
+const workflow = ref<CaseWorkflow>({ evidence: [], reviewTasks: [], agentEvidenceCandidates: [] })
 const allAssets = ref<MediaAsset[]>([])
 const assignees = ref<AssignableUser[]>([])
 const audit = ref<AuditEntry[]>([])
@@ -43,7 +43,11 @@ const evidence = reactive({
   conclusion: 'INCONCLUSIVE' as EvidenceConclusion,
   confidence: 'MEDIUM' as EvidenceConfidence,
 })
-const review = reactive({ decision: 'APPROVED' as ReviewStatus, reason: '' })
+const review = reactive({
+  decision: 'APPROVED' as ReviewStatus,
+  reason: '',
+  citedEvidenceIds: [] as string[],
+})
 const previewUrl = ref('')
 const previewName = ref('')
 const previewVisible = ref(false)
@@ -89,6 +93,9 @@ const canReview = computed(() => Boolean(
   current.value?.status === 'WAITING_REVIEW' &&
     pendingReview.value?.reviewerId === auth.user?.id &&
     (auth.hasPermission('review:approve') || auth.hasPermission('review:reject')),
+))
+const availableAgentObservations = computed(() => workflow.value.agentEvidenceCandidates.filter(
+  (candidate) => !candidate.promotedEvidenceId,
 ))
 const nextTransition = computed<{ target: CaseStatus; label: string } | null>(() => {
   const status = current.value?.status
@@ -163,6 +170,19 @@ async function addEvidence() {
   })
 }
 
+async function promoteAgentObservation(observationId: string) {
+  if (!current.value) return
+  await mutate(async () => {
+    await caseApi.promoteAgentObservation(
+      caseId,
+      observationId,
+      current.value!.version,
+      auth.accessToken,
+    )
+    ElMessage.success('Agent Observation 已纳入正式案件证据')
+  })
+}
+
 async function transition() {
   if (!current.value || !nextTransition.value) return
   await mutate(async () => {
@@ -220,12 +240,14 @@ async function decideReview() {
       {
         decision: review.decision,
         reason: review.reason,
+        citedEvidenceIds: review.citedEvidenceIds,
         taskVersion: pendingReview.value!.version,
         caseVersion: current.value!.version,
       },
       auth.accessToken,
     )
     review.reason = ''
+    review.citedEvidenceIds = []
     ElMessage.success(review.decision === 'APPROVED' ? '审核已通过' : '案件已驳回')
   })
 }
@@ -253,6 +275,10 @@ function assigneeName(id: string | null) {
 
 function assetName(id: string) {
   return details.value?.assets.find((asset) => asset.id === id)?.originalFilename ?? id
+}
+
+function evidenceTitle(id: string) {
+  return workflow.value.evidence.find((item) => item.id === id)?.title ?? id
 }
 
 function showError(error: unknown) {
@@ -355,7 +381,33 @@ onBeforeUnmount(() => {
       </section>
 
       <section class="panel evidence-panel">
-        <div class="section-heading"><div><h2>人工证据</h2><p>调查观察只追加，不在原记录上覆盖</p></div></div>
+        <div class="section-heading"><div><h2>案件证据</h2><p>人工观察与经调查员确认纳入的 Agent Observation 均为正式证据；Agent 结果不自动形成结论</p></div></div>
+        <div v-if="canAddEvidence && workflow.agentEvidenceCandidates.length" class="evidence-list">
+          <article v-for="candidate in workflow.agentEvidenceCandidates" :key="candidate.observationId" class="evidence-card">
+            <div>
+              <strong>{{ candidate.evidenceType }}</strong>
+              <el-tag size="small" type="warning">AGENT OBSERVATION</el-tag>
+              <el-tag v-if="candidate.promotedEvidenceId" size="small" type="success">已纳入正式证据</el-tag>
+            </div>
+            <p>{{ candidate.summary }}</p>
+            <small>{{ assetName(candidate.assetId) }} · {{ formatDate(candidate.createdAt) }}</small>
+            <details><summary>查看结构化 Payload</summary><pre>{{ JSON.stringify(candidate.payload, null, 2) }}</pre></details>
+            <el-button
+              v-if="!candidate.promotedEvidenceId"
+              type="success"
+              plain
+              :loading="saving"
+              @click="promoteAgentObservation(candidate.observationId)"
+            >纳入案件证据</el-button>
+          </article>
+        </div>
+        <el-alert
+          v-if="canAddEvidence && !workflow.agentEvidenceCandidates.length"
+          title="尚无已完成的 Agent Observation，可先运行确定性媒体分析 Agent"
+          type="info"
+          :closable="false"
+          show-icon
+        />
         <el-form v-if="canAddEvidence" class="evidence-form" label-position="top">
           <div class="form-grid">
             <el-form-item label="关联媒体">
@@ -378,16 +430,22 @@ onBeforeUnmount(() => {
             </el-form-item>
           </div>
           <el-form-item label="观察说明"><el-input v-model="evidence.observation" type="textarea" :rows="4" maxlength="4000" show-word-limit /></el-form-item>
-          <el-button type="primary" :disabled="!evidence.assetId || !evidence.title.trim() || !evidence.observation.trim()" :loading="saving" @click="addEvidence">记录证据</el-button>
+          <el-button type="primary" :disabled="!evidence.assetId || !evidence.title.trim() || !evidence.observation.trim()" :loading="saving" @click="addEvidence">记录人工证据</el-button>
         </el-form>
         <div v-if="workflow.evidence.length" class="evidence-list">
           <article v-for="item in workflow.evidence" :key="item.id" class="evidence-card">
-            <div><strong>{{ item.title }}</strong><el-tag size="small">{{ item.conclusion }}</el-tag><el-tag size="small" type="info">{{ item.confidence }}</el-tag></div>
+            <div>
+              <strong>{{ item.title }}</strong>
+              <el-tag size="small" :type="item.evidenceType === 'AGENT_OBSERVATION' ? 'warning' : 'primary'">{{ item.evidenceType }}</el-tag>
+              <el-tag size="small">{{ item.conclusion }}</el-tag>
+              <el-tag size="small" type="info">{{ item.confidence }}</el-tag>
+            </div>
             <p>{{ item.observation }}</p>
             <small>{{ assetName(item.assetId) }} · {{ formatDate(item.createdAt) }}</small>
+            <small v-if="item.sourceObservationId">来源 Observation：{{ item.sourceObservationId }}</small>
           </article>
         </div>
-        <el-empty v-else description="进入调查状态后，由分派的调查员记录至少一条人工证据" />
+        <el-empty v-else description="进入调查状态后，由分派的调查员记录人工证据或纳入 Agent Observation" />
       </section>
 
       <section class="panel review-panel">
@@ -398,13 +456,27 @@ onBeforeUnmount(() => {
             <el-radio-button value="REJECTED">驳回案件</el-radio-button>
           </el-radio-group>
           <el-input v-model="review.reason" type="textarea" :rows="3" maxlength="2000" placeholder="审核意见；驳回时必填" />
-          <el-button type="primary" :disabled="review.decision === 'REJECTED' && !review.reason.trim()" :loading="saving" @click="decideReview">提交审核决定</el-button>
+          <div>
+            <strong>引用本次决定所依据的正式证据</strong>
+            <el-checkbox-group v-model="review.citedEvidenceIds">
+              <el-checkbox v-for="item in workflow.evidence" :key="item.id" :value="item.id">
+                {{ item.title }}（{{ item.evidenceType }}）
+              </el-checkbox>
+            </el-checkbox-group>
+          </div>
+          <el-button
+            type="primary"
+            :disabled="!review.citedEvidenceIds.length || (review.decision === 'REJECTED' && !review.reason.trim())"
+            :loading="saving"
+            @click="decideReview"
+          >提交审核决定</el-button>
         </div>
         <ol v-if="workflow.reviewTasks.length" class="review-list">
           <li v-for="task in workflow.reviewTasks" :key="task.id">
             <el-tag :type="task.status === 'APPROVED' ? 'success' : task.status === 'REJECTED' ? 'danger' : 'warning'">{{ task.status }}</el-tag>
             <span>{{ formatDate(task.createdAt) }}</span>
             <p>{{ task.decisionReason || '等待审核决定' }}</p>
+            <small v-if="task.citedEvidenceIds.length">引用证据：{{ task.citedEvidenceIds.map(evidenceTitle).join('、') }}</small>
           </li>
         </ol>
         <el-empty v-else description="案件提交 WAITING_REVIEW 后将生成审核任务" />

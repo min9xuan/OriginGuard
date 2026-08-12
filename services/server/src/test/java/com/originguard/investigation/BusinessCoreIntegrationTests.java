@@ -248,6 +248,13 @@ class BusinessCoreIntegrationTests {
                 .andExpect(jsonPath("$.evidenceType").value("HUMAN_OBSERVATION"))
                 .andExpect(jsonPath("$.conclusion").value("LIKELY_SYNTHETIC"));
 
+        MvcResult evidenceResult = mockMvc.perform(get("/api/v1/cases/{id}/workflow", caseId)
+                        .header("Authorization", bearer(investigator)))
+                .andExpect(status().isOk())
+                .andReturn();
+        String evidenceId = JsonPath.read(
+                evidenceResult.getResponse().getContentAsString(), "$.evidence[0].id");
+
         transition(investigator, caseId, "WAITING_REVIEW", 4, 5);
 
         MvcResult workflow = mockMvc.perform(get("/api/v1/cases/{id}/workflow", caseId)
@@ -262,22 +269,23 @@ class BusinessCoreIntegrationTests {
         mockMvc.perform(post("/api/v1/cases/{caseId}/reviews/{taskId}/decision", caseId, taskId)
                         .header("Authorization", bearer(admin))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(reviewJson("APPROVED", "", 0, 5)))
+                        .content(reviewJson("APPROVED", "", evidenceId, 0, 5)))
                 .andExpect(status().isForbidden());
 
         mockMvc.perform(post("/api/v1/cases/{caseId}/reviews/{taskId}/decision", caseId, taskId)
                         .header("Authorization", bearer(reviewer))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(reviewJson("REJECTED", "", 0, 5)))
+                        .content(reviewJson("REJECTED", "", evidenceId, 0, 5)))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("REVIEW_REASON_REQUIRED"));
 
         mockMvc.perform(post("/api/v1/cases/{caseId}/reviews/{taskId}/decision", caseId, taskId)
                         .header("Authorization", bearer(reviewer))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(reviewJson("APPROVED", "人工复核同意该判断", 0, 5)))
+                        .content(reviewJson("APPROVED", "人工复核同意该判断", evidenceId, 0, 5)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.reviewTasks[0].status").value("APPROVED"));
+                .andExpect(jsonPath("$.reviewTasks[0].status").value("APPROVED"))
+                .andExpect(jsonPath("$.reviewTasks[0].citedEvidenceIds[0]").value(evidenceId));
 
         mockMvc.perform(get("/api/v1/cases/{id}", caseId).header("Authorization", bearer(reviewer)))
                 .andExpect(status().isOk())
@@ -376,10 +384,11 @@ class BusinessCoreIntegrationTests {
                 """.formatted(target, version);
     }
 
-    private String reviewJson(String decision, String reason, int taskVersion, int caseVersion) {
+    private String reviewJson(
+            String decision, String reason, String evidenceId, int taskVersion, int caseVersion) {
         return """
-                {"decision":"%s","reason":"%s","taskVersion":%d,"caseVersion":%d}
-                """.formatted(decision, reason, taskVersion, caseVersion);
+                {"decision":"%s","reason":"%s","citedEvidenceIds":["%s"],"taskVersion":%d,"caseVersion":%d}
+                """.formatted(decision, reason, evidenceId, taskVersion, caseVersion);
     }
 
     private UUID userId(String username) {

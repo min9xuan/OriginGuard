@@ -1,6 +1,7 @@
 package com.originguard.investigation.domain;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 public record ReviewTask(
@@ -12,6 +13,11 @@ public record ReviewTask(
         String decisionReason,
         UUID createdBy,
         UUID decidedBy,
+        List<UUID> citedEvidenceIds,
         long version,
         Instant createdAt,
-        Instant decidedAt) {}
+        Instant decidedAt) {
+    public ReviewTask {
+        citedEvidenceIds = List.copyOf(citedEvidenceIds);
+    }
+}

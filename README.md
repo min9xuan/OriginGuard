@@ -2,7 +2,7 @@
 
 OriginGuard 是一个面向内容审核与数字取证场景的 AIGC 内容真实性检测、篡改分析和来源溯源平台。
 
-> 当前状态：M3.2 已完成；Fake Planner 会依次运行文件完整性、图片元数据和感知相似度三个确定性 Skill，并为每一步保存 Observation、Checkpoint 与 Trace。RAG、真实 Planner、C2PA、检测模型和报告归档尚未接入。
+> 当前状态：M3.3 已完成；调查员可将 Agent Observation 明确纳入正式案件证据，审核员必须引用正式证据后才能提交决定，Agent 结果仍不会自动形成真实性结论。
 
 ## 当前包含
 
@@ -116,3 +116,7 @@ reviewer → 查看证据与审核任务 → 通过或填写理由驳回
 调查员先上传新的 JPEG/PNG 媒体并关联案件，将已分派给自己的案件推进到 `INVESTIGATING`，然后点击“运行 Agent”。任务会同步执行确定性流程并跳转到 Trace 页面。具有 `agent:trace:read` 权限的用户也可从“Agent 任务”导航查看租户内任务。
 
 Fake Planner 仍不调用 LLM，但会固定编排 `verify_media_integrity`、`extract_image_metadata`、`compare_perceptual_similarity` 三个版本化 Skill。对应 Tool 都会读取 MinIO 中的真实字节；由于这些确定性事实不是 AIGC 分类证据，真实性结论仍为 `INCONCLUSIVE`。实现说明见 [M3.2 多确定性 Skill](docs/product/m3.2-deterministic-media-skills.md)。
+
+## M3.3 Observation、正式证据与审核引用
+
+Agent 运行后，三个 Observation 会作为候选调查材料出现在案件页。分派的调查员可逐条确认纳入正式案件证据；系统保存原 Observation ID，禁止重复纳入，并固定标记为 `INCONCLUSIVE / LOW`。案件进入审核后，审核员必须勾选至少一条正式证据才能提交决定，引用关系随审核任务永久保存。实现说明见 [M3.3 Agent 证据审核闭环](docs/product/m3.3-agent-evidence-review-loop.md)。

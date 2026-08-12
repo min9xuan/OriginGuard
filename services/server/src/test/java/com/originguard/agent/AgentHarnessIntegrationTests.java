@@ -84,7 +84,7 @@ class AgentHarnessIntegrationTests {
                 .andReturn();
         String taskId = JsonPath.read(created.getResponse().getContentAsString(), "$.task.id");
 
-        mockMvc.perform(post("/api/v1/agent-tasks/{id}/run", taskId)
+        MvcResult completed = mockMvc.perform(post("/api/v1/agent-tasks/{id}/run", taskId)
                         .header("Authorization", bearer(investigator))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"version\":0}"))
@@ -108,7 +108,37 @@ class AgentHarnessIntegrationTests {
                 .andExpect(jsonPath("$.observations[2].evidenceType").value("PERCEPTUAL_SIMILARITY"))
                 .andExpect(jsonPath("$.observations[2].payload.comparisonCount").value(0))
                 .andExpect(jsonPath("$.checkpoints.length()").value(3))
-                .andExpect(jsonPath("$.checkpoints[2].state.remainingStepBudget").value(1));
+                .andExpect(jsonPath("$.checkpoints[2].state.remainingStepBudget").value(1))
+                .andReturn();
+        String observationId = JsonPath.read(
+                completed.getResponse().getContentAsString(), "$.observations[0].id");
+
+        mockMvc.perform(post("/api/v1/cases/{id}/evidence/from-agent", caseId)
+                        .header("Authorization", bearer(investigator))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"observationId":"%s","version":2}
+                                """.formatted(observationId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.evidenceType").value("AGENT_OBSERVATION"))
+                .andExpect(jsonPath("$.sourceObservationId").value(observationId))
+                .andExpect(jsonPath("$.conclusion").value("INCONCLUSIVE"))
+                .andExpect(jsonPath("$.confidence").value("LOW"));
+
+        mockMvc.perform(post("/api/v1/cases/{id}/evidence/from-agent", caseId)
+                        .header("Authorization", bearer(investigator))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"observationId":"%s","version":3}
+                                """.formatted(observationId)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("AGENT_OBSERVATION_ALREADY_INCLUDED"));
+
+        mockMvc.perform(get("/api/v1/cases/{id}/workflow", caseId)
+                        .header("Authorization", bearer(reviewer)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.evidence[0].evidenceType").value("AGENT_OBSERVATION"))
+                .andExpect(jsonPath("$.agentEvidenceCandidates[0].promotedEvidenceId").isNotEmpty());
 
         mockMvc.perform(get("/api/v1/agent-tasks/{id}", taskId)
                         .header("Authorization", bearer(reviewer)))
@@ -120,7 +150,8 @@ class AgentHarnessIntegrationTests {
                         .header("Authorization", bearer(reviewer)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[*].action", hasItem("AGENT_TASK_CREATED")))
-                .andExpect(jsonPath("$[*].action", hasItem("AGENT_TASK_COMPLETED")));
+                .andExpect(jsonPath("$[*].action", hasItem("AGENT_TASK_COMPLETED")))
+                .andExpect(jsonPath("$[*].action", hasItem("AGENT_OBSERVATION_INCLUDED")));
     }
 
     @Test

@@ -4,6 +4,7 @@ import com.originguard.audit.application.AuditService;
 import com.originguard.identity.application.CurrentActorProvider;
 import com.originguard.identity.domain.CurrentActor;
 import com.originguard.investigation.domain.AssignableUser;
+import com.originguard.investigation.domain.AgentEvidenceCandidate;
 import com.originguard.investigation.domain.CaseStatus;
 import com.originguard.investigation.domain.EvidenceConclusion;
 import com.originguard.investigation.domain.EvidenceConfidence;
@@ -137,11 +138,49 @@ public class InvestigationWorkflowService {
         return evidence;
     }
 
+    @Transactional
+    public InvestigationEvidence promoteAgentObservation(
+            UUID caseId, UUID observationId, long expectedVersion) {
+        CurrentActor actor = actorProvider.getRequiredActor();
+        InvestigationCase current = requireCase(actor.tenantId(), caseId);
+        accessPolicy.requireAssignedInvestigator(current, actor);
+        if (current.status() != CaseStatus.INVESTIGATING) {
+            throw new BusinessConflictException(
+                    "EVIDENCE_NOT_EDITABLE", "Agent observations can only be included during investigation");
+        }
+        AgentEvidenceCandidate candidate = workflowRepository
+                .findAgentEvidenceCandidate(actor.tenantId(), caseId, observationId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "AGENT_OBSERVATION_NOT_FOUND", "Completed Agent observation was not found for this case"));
+        if (candidate.promotedEvidenceId() != null) {
+            throw new BusinessConflictException(
+                    "AGENT_OBSERVATION_ALREADY_INCLUDED", "This Agent observation is already formal case evidence");
+        }
+        requireVersion(caseRepository.incrementVersion(actor.tenantId(), caseId, expectedVersion));
+        UUID evidenceId = UUID.randomUUID();
+        InvestigationEvidence evidence = workflowRepository.insertAgentEvidence(
+                evidenceId,
+                actor.tenantId(),
+                caseId,
+                candidate,
+                titleFor(candidate.evidenceType()),
+                candidate.summary() + " 本记录来自确定性 Agent Tool，仅作为辅助事实，不构成 AIGC 结论。",
+                actor.userId());
+        auditService.record(
+                actor.tenantId(), actor.userId(), "AGENT_OBSERVATION_INCLUDED",
+                InvestigationCaseService.RESOURCE_TYPE, caseId,
+                Map.of(
+                        "evidenceId", evidenceId.toString(),
+                        "observationId", observationId.toString(),
+                        "agentEvidenceType", candidate.evidenceType()));
+        return evidence;
+    }
+
     public ReviewTask prepareReviewTask(InvestigationCase current, CurrentActor actor) {
         accessPolicy.requireAssignedInvestigator(current, actor);
         if (workflowRepository.countEvidence(actor.tenantId(), current.id()) == 0) {
             throw new BusinessConflictException(
-                    "CASE_EVIDENCE_REQUIRED", "At least one human evidence record is required before review");
+                    "CASE_EVIDENCE_REQUIRED", "At least one formal evidence record is required before review");
         }
         UUID reviewerId = current.assignedReviewerId();
         if (reviewerId == null) {
@@ -173,7 +212,8 @@ public class InvestigationWorkflowService {
             long expectedTaskVersion,
             long expectedCaseVersion,
             ReviewStatus decision,
-            String reason) {
+            String reason,
+            List<UUID> citedEvidenceIds) {
         CurrentActor actor = actorProvider.getRequiredActor();
         InvestigationCase current = requireCase(actor.tenantId(), caseId);
         if (current.status() != CaseStatus.WAITING_REVIEW) {
@@ -200,6 +240,17 @@ public class InvestigationWorkflowService {
             throw new BusinessConflictException(
                     "REVIEW_REASON_REQUIRED", "A rejection reason is required");
         }
+        List<UUID> normalizedEvidenceIds = citedEvidenceIds == null
+                ? List.of()
+                : citedEvidenceIds.stream().distinct().toList();
+        if (normalizedEvidenceIds.isEmpty()) {
+            throw new BusinessConflictException(
+                    "REVIEW_EVIDENCE_REQUIRED", "The review decision must cite at least one formal case evidence record");
+        }
+        if (!workflowRepository.evidenceBelongsToCase(actor.tenantId(), caseId, normalizedEvidenceIds)) {
+            throw new BusinessConflictException(
+                    "REVIEW_EVIDENCE_INVALID", "Cited evidence must belong to the reviewed case");
+        }
         if (!workflowRepository.decideReview(
                 actor.tenantId(),
                 caseId,
@@ -211,6 +262,7 @@ public class InvestigationWorkflowService {
             throw new BusinessConflictException(
                     "REVIEW_VERSION_CONFLICT", "The review task changed; reload and retry");
         }
+        workflowRepository.replaceReviewEvidenceReferences(actor.tenantId(), taskId, normalizedEvidenceIds);
         CaseStatus target = decision == ReviewStatus.APPROVED ? CaseStatus.CONFIRMED : CaseStatus.REJECTED;
         requireVersion(caseRepository.updateStatus(
                 actor.tenantId(), caseId, expectedCaseVersion, CaseStatus.WAITING_REVIEW, target));
@@ -223,7 +275,8 @@ public class InvestigationWorkflowService {
                 Map.of(
                         "reviewTaskId", taskId.toString(),
                         "decision", decision.name(),
-                        "reason", normalizedReason));
+                        "reason", normalizedReason,
+                        "citedEvidenceIds", normalizedEvidenceIds.stream().map(UUID::toString).toList()));
         auditService.record(
                 actor.tenantId(),
                 actor.userId(),
@@ -237,7 +290,17 @@ public class InvestigationWorkflowService {
     private WorkflowSnapshot snapshot(UUID tenantId, UUID caseId) {
         return new WorkflowSnapshot(
                 workflowRepository.findEvidence(tenantId, caseId),
-                workflowRepository.findReviewTasks(tenantId, caseId));
+                workflowRepository.findReviewTasks(tenantId, caseId),
+                workflowRepository.findAgentEvidenceCandidates(tenantId, caseId));
+    }
+
+    private String titleFor(String evidenceType) {
+        return switch (evidenceType) {
+            case "FILE_INTEGRITY" -> "Agent：文件完整性核验";
+            case "IMAGE_METADATA" -> "Agent：图片元数据观察";
+            case "PERCEPTUAL_SIMILARITY" -> "Agent：感知相似度观察";
+            default -> "Agent：确定性媒体观察";
+        };
     }
 
     private InvestigationCase requireCase(UUID tenantId, UUID caseId) {
@@ -268,10 +331,13 @@ public class InvestigationWorkflowService {
     }
 
     public record WorkflowSnapshot(
-            List<InvestigationEvidence> evidence, List<ReviewTask> reviewTasks) {
+            List<InvestigationEvidence> evidence,
+            List<ReviewTask> reviewTasks,
+            List<AgentEvidenceCandidate> agentEvidenceCandidates) {
         public WorkflowSnapshot {
             evidence = List.copyOf(evidence);
             reviewTasks = List.copyOf(reviewTasks);
+            agentEvidenceCandidates = List.copyOf(agentEvidenceCandidates);
         }
     }
 }

@@ -91,12 +91,25 @@ export const caseApi = {
       accessToken,
     )
   },
+  promoteAgentObservation(
+    caseId: string,
+    observationId: string,
+    version: number,
+    accessToken: string,
+  ) {
+    return apiRequest<InvestigationEvidence>(
+      `/cases/${caseId}/evidence/from-agent`,
+      { method: 'POST', body: JSON.stringify({ observationId, version }) },
+      accessToken,
+    )
+  },
   decideReview(
     caseId: string,
     taskId: string,
     request: {
       decision: ReviewStatus
       reason: string
+      citedEvidenceIds: string[]
       taskVersion: number
       caseVersion: number
     },

@@ -2,6 +2,7 @@ package com.originguard.investigation.interfaces;
 
 import com.originguard.investigation.application.InvestigationWorkflowService;
 import com.originguard.investigation.domain.AssignableUser;
+import com.originguard.investigation.domain.AgentEvidenceCandidate;
 import com.originguard.investigation.domain.EvidenceConclusion;
 import com.originguard.investigation.domain.EvidenceConfidence;
 import com.originguard.investigation.domain.InvestigationCase;
@@ -67,6 +68,14 @@ public class InvestigationWorkflowController {
                 request.confidence()));
     }
 
+    @PostMapping("/{caseId}/evidence/from-agent")
+    @PreAuthorize("hasAuthority('case:update')")
+    public EvidenceView promoteAgentObservation(
+            @PathVariable UUID caseId, @Valid @RequestBody PromoteAgentObservationRequest request) {
+        return EvidenceView.from(service.promoteAgentObservation(
+                caseId, request.observationId(), request.version()));
+    }
+
     @PostMapping("/{caseId}/reviews/{taskId}/decision")
     @PreAuthorize("hasAnyAuthority('review:approve', 'review:reject')")
     public WorkflowView decide(
@@ -79,7 +88,8 @@ public class InvestigationWorkflowController {
                 request.taskVersion(),
                 request.caseVersion(),
                 request.decision(),
-                request.reason()));
+                request.reason(),
+                request.citedEvidenceIds()));
     }
 
     public record AssignmentRequest(
@@ -95,17 +105,26 @@ public class InvestigationWorkflowController {
             @NotNull EvidenceConfidence confidence,
             @Min(0) long version) {}
 
+    public record PromoteAgentObservationRequest(
+            @NotNull UUID observationId,
+            @Min(0) long version) {}
+
     public record ReviewDecisionRequest(
             @NotNull ReviewStatus decision,
             @Size(max = 2000) String reason,
+            @NotNull @Size(min = 1) List<UUID> citedEvidenceIds,
             @Min(0) long taskVersion,
             @Min(0) long caseVersion) {}
 
-    public record WorkflowView(List<EvidenceView> evidence, List<ReviewTaskView> reviewTasks) {
+    public record WorkflowView(
+            List<EvidenceView> evidence,
+            List<ReviewTaskView> reviewTasks,
+            List<AgentEvidenceCandidate> agentEvidenceCandidates) {
         static WorkflowView from(InvestigationWorkflowService.WorkflowSnapshot snapshot) {
             return new WorkflowView(
                     snapshot.evidence().stream().map(EvidenceView::from).toList(),
-                    snapshot.reviewTasks().stream().map(ReviewTaskView::from).toList());
+                    snapshot.reviewTasks().stream().map(ReviewTaskView::from).toList(),
+                    snapshot.agentEvidenceCandidates());
         }
     }
 
@@ -117,6 +136,7 @@ public class InvestigationWorkflowController {
             String observation,
             EvidenceConclusion conclusion,
             EvidenceConfidence confidence,
+            UUID sourceObservationId,
             UUID createdBy,
             Instant createdAt) {
         static EvidenceView from(InvestigationEvidence evidence) {
@@ -128,6 +148,7 @@ public class InvestigationWorkflowController {
                     evidence.observation(),
                     evidence.conclusion(),
                     evidence.confidence(),
+                    evidence.sourceObservationId(),
                     evidence.createdBy(),
                     evidence.createdAt());
         }
@@ -140,6 +161,7 @@ public class InvestigationWorkflowController {
             String decisionReason,
             UUID createdBy,
             UUID decidedBy,
+            List<UUID> citedEvidenceIds,
             long version,
             Instant createdAt,
             Instant decidedAt) {
@@ -151,6 +173,7 @@ public class InvestigationWorkflowController {
                     task.decisionReason(),
                     task.createdBy(),
                     task.decidedBy(),
+                    task.citedEvidenceIds(),
                     task.version(),
                     task.createdAt(),
                     task.decidedAt());

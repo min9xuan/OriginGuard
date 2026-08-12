@@ -80,11 +80,12 @@ export type EvidenceConfidence = 'LOW' | 'MEDIUM' | 'HIGH'
 export interface InvestigationEvidence {
   id: string
   assetId: string
-  evidenceType: 'HUMAN_OBSERVATION'
+  evidenceType: 'HUMAN_OBSERVATION' | 'AGENT_OBSERVATION'
   title: string
   observation: string
   conclusion: EvidenceConclusion
   confidence: EvidenceConfidence
+  sourceObservationId: string | null
   createdBy: string
   createdAt: string
 }
@@ -98,6 +99,7 @@ export interface ReviewTask {
   decisionReason: string
   createdBy: string
   decidedBy: string | null
+  citedEvidenceIds: string[]
   version: number
   createdAt: string
   decidedAt: string | null
@@ -106,4 +108,16 @@ export interface ReviewTask {
 export interface CaseWorkflow {
   evidence: InvestigationEvidence[]
   reviewTasks: ReviewTask[]
+  agentEvidenceCandidates: AgentEvidenceCandidate[]
+}
+
+export interface AgentEvidenceCandidate {
+  observationId: string
+  taskId: string
+  assetId: string
+  evidenceType: 'FILE_INTEGRITY' | 'IMAGE_METADATA' | 'PERCEPTUAL_SIMILARITY'
+  summary: string
+  payload: Record<string, unknown>
+  promotedEvidenceId: string | null
+  createdAt: string
 }

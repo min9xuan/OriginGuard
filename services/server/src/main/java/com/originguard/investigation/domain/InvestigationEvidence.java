@@ -13,5 +13,6 @@ public record InvestigationEvidence(
         String observation,
         EvidenceConclusion conclusion,
         EvidenceConfidence confidence,
+        UUID sourceObservationId,
         UUID createdBy,
         Instant createdAt) {}

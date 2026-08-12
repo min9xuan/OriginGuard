@@ -1,6 +1,7 @@
 package com.originguard.investigation.infrastructure;
 
 import com.originguard.investigation.domain.AssignableUser;
+import com.originguard.investigation.domain.AgentEvidenceCandidate;
 import com.originguard.investigation.domain.EvidenceConclusion;
 import com.originguard.investigation.domain.EvidenceConfidence;
 import com.originguard.investigation.domain.InvestigationEvidence;
@@ -14,13 +15,18 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
+import tools.jackson.core.JacksonException;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
 
 @Repository
 public class InvestigationWorkflowRepository {
     private final JdbcClient jdbcClient;
+    private final ObjectMapper objectMapper;
 
-    public InvestigationWorkflowRepository(JdbcClient jdbcClient) {
+    public InvestigationWorkflowRepository(JdbcClient jdbcClient, ObjectMapper objectMapper) {
         this.jdbcClient = jdbcClient;
+        this.objectMapper = objectMapper;
     }
 
     public List<AssignableUser> findAssignableUsers(UUID tenantId) {
@@ -90,13 +96,29 @@ public class InvestigationWorkflowRepository {
             EvidenceConclusion conclusion,
             EvidenceConfidence confidence,
             UUID createdBy) {
+        return insertEvidence(id, tenantId, caseId, assetId, "HUMAN_OBSERVATION", null,
+                title, observation, conclusion, confidence, createdBy);
+    }
+
+    public InvestigationEvidence insertAgentEvidence(
+            UUID id, UUID tenantId, UUID caseId, AgentEvidenceCandidate candidate,
+            String title, String observation, UUID createdBy) {
+        return insertEvidence(
+                id, tenantId, caseId, candidate.assetId(), "AGENT_OBSERVATION", candidate.observationId(),
+                title, observation, EvidenceConclusion.INCONCLUSIVE, EvidenceConfidence.LOW, createdBy);
+    }
+
+    private InvestigationEvidence insertEvidence(
+            UUID id, UUID tenantId, UUID caseId, UUID assetId, String evidenceType,
+            UUID sourceObservationId, String title, String observation,
+            EvidenceConclusion conclusion, EvidenceConfidence confidence, UUID createdBy) {
         jdbcClient.sql("""
                         INSERT INTO investigation_evidence(
                             id, tenant_id, case_id, asset_id, title, observation,
-                            conclusion, confidence, created_by
+                            conclusion, confidence, evidence_type, source_observation_id, created_by
                         ) VALUES (
                             :id, :tenantId, :caseId, :assetId, :title, :observation,
-                            :conclusion, :confidence, :createdBy
+                            :conclusion, :confidence, :evidenceType, :sourceObservationId, :createdBy
                         )
                         """)
                 .param("id", id)
@@ -107,9 +129,46 @@ public class InvestigationWorkflowRepository {
                 .param("observation", observation)
                 .param("conclusion", conclusion.name())
                 .param("confidence", confidence.name())
+                .param("evidenceType", evidenceType)
+                .param("sourceObservationId", sourceObservationId)
                 .param("createdBy", createdBy)
                 .update();
         return findEvidenceById(tenantId, caseId, id).orElseThrow();
+    }
+
+    public List<AgentEvidenceCandidate> findAgentEvidenceCandidates(UUID tenantId, UUID caseId) {
+        return jdbcClient.sql("""
+                        SELECT o.id AS observation_id, o.task_id, o.asset_id, o.evidence_type,
+                               o.summary, o.payload::text AS payload, e.id AS promoted_evidence_id,
+                               o.created_at
+                        FROM agent_observation o
+                        JOIN agent_task t ON t.id = o.task_id AND t.tenant_id = o.tenant_id
+                        LEFT JOIN investigation_evidence e
+                          ON e.source_observation_id = o.id AND e.tenant_id = o.tenant_id
+                        WHERE o.tenant_id = :tenantId
+                          AND o.case_id = :caseId
+                          AND t.status = 'COMPLETED'
+                        ORDER BY o.created_at, o.sequence_number
+                        """)
+                .param("tenantId", tenantId)
+                .param("caseId", caseId)
+                .query((rs, rowNum) -> new AgentEvidenceCandidate(
+                        rs.getObject("observation_id", UUID.class),
+                        rs.getObject("task_id", UUID.class),
+                        rs.getObject("asset_id", UUID.class),
+                        rs.getString("evidence_type"),
+                        rs.getString("summary"),
+                        readJson(rs.getString("payload")),
+                        rs.getObject("promoted_evidence_id", UUID.class),
+                        rs.getTimestamp("created_at").toInstant()))
+                .list();
+    }
+
+    public Optional<AgentEvidenceCandidate> findAgentEvidenceCandidate(
+            UUID tenantId, UUID caseId, UUID observationId) {
+        return findAgentEvidenceCandidates(tenantId, caseId).stream()
+                .filter(candidate -> candidate.observationId().equals(observationId))
+                .findFirst();
     }
 
     public List<InvestigationEvidence> findEvidence(UUID tenantId, UUID caseId) {
@@ -171,8 +230,8 @@ public class InvestigationWorkflowRepository {
 
     public List<ReviewTask> findReviewTasks(UUID tenantId, UUID caseId) {
         return jdbcClient.sql(REVIEW_SELECT + """
-                         WHERE tenant_id = :tenantId AND case_id = :caseId
-                         ORDER BY created_at DESC, id
+                         WHERE r.tenant_id = :tenantId AND r.case_id = :caseId
+                         ORDER BY r.created_at DESC, r.id
                         """)
                 .param("tenantId", tenantId)
                 .param("caseId", caseId)
@@ -182,7 +241,7 @@ public class InvestigationWorkflowRepository {
 
     public Optional<ReviewTask> findReviewTask(UUID tenantId, UUID caseId, UUID taskId) {
         return jdbcClient.sql(REVIEW_SELECT + """
-                         WHERE tenant_id = :tenantId AND case_id = :caseId AND id = :taskId
+                         WHERE r.tenant_id = :tenantId AND r.case_id = :caseId AND r.id = :taskId
                         """)
                 .param("tenantId", tenantId)
                 .param("caseId", caseId)
@@ -224,6 +283,34 @@ public class InvestigationWorkflowRepository {
         return updated == 1;
     }
 
+    public boolean evidenceBelongsToCase(UUID tenantId, UUID caseId, List<UUID> evidenceIds) {
+        if (evidenceIds.isEmpty()) return false;
+        int count = jdbcClient.sql("""
+                        SELECT count(*) FROM investigation_evidence
+                        WHERE tenant_id = :tenantId AND case_id = :caseId AND id IN (:evidenceIds)
+                        """)
+                .param("tenantId", tenantId)
+                .param("caseId", caseId)
+                .param("evidenceIds", evidenceIds)
+                .query(Integer.class)
+                .single();
+        return count == evidenceIds.size();
+    }
+
+    public void replaceReviewEvidenceReferences(
+            UUID tenantId, UUID reviewTaskId, List<UUID> evidenceIds) {
+        jdbcClient.sql("DELETE FROM review_evidence_reference WHERE tenant_id = :tenantId AND review_task_id = :taskId")
+                .param("tenantId", tenantId).param("taskId", reviewTaskId).update();
+        for (UUID evidenceId : evidenceIds) {
+            jdbcClient.sql("""
+                            INSERT INTO review_evidence_reference(tenant_id, review_task_id, evidence_id)
+                            VALUES (:tenantId, :taskId, :evidenceId)
+                            """)
+                    .param("tenantId", tenantId).param("taskId", reviewTaskId)
+                    .param("evidenceId", evidenceId).update();
+        }
+    }
+
     private Optional<InvestigationEvidence> findEvidenceById(UUID tenantId, UUID caseId, UUID id) {
         return jdbcClient.sql(EVIDENCE_SELECT + """
                          WHERE tenant_id = :tenantId AND case_id = :caseId AND id = :id
@@ -246,6 +333,7 @@ public class InvestigationWorkflowRepository {
                 rs.getString("observation"),
                 EvidenceConclusion.valueOf(rs.getString("conclusion")),
                 EvidenceConfidence.valueOf(rs.getString("confidence")),
+                rs.getObject("source_observation_id", UUID.class),
                 rs.getObject("created_by", UUID.class),
                 rs.getTimestamp("created_at").toInstant());
     }
@@ -261,6 +349,7 @@ public class InvestigationWorkflowRepository {
                 rs.getString("decision_reason"),
                 rs.getObject("created_by", UUID.class),
                 rs.getObject("decided_by", UUID.class),
+                java.util.Arrays.asList((UUID[]) rs.getArray("cited_evidence_ids").getArray()),
                 rs.getLong("version"),
                 rs.getTimestamp("created_at").toInstant(),
                 decidedAt == null ? null : decidedAt.toInstant());
@@ -268,13 +357,27 @@ public class InvestigationWorkflowRepository {
 
     private static final String EVIDENCE_SELECT = """
             SELECT id, tenant_id, case_id, asset_id, evidence_type, title, observation,
-                   conclusion, confidence, created_by, created_at
+                   conclusion, confidence, source_observation_id, created_by, created_at
             FROM investigation_evidence
             """;
 
     private static final String REVIEW_SELECT = """
-            SELECT id, tenant_id, case_id, reviewer_id, status, decision_reason,
-                   created_by, decided_by, version, created_at, decided_at
-            FROM review_task
+            SELECT r.id, r.tenant_id, r.case_id, r.reviewer_id, r.status, r.decision_reason,
+                   r.created_by, r.decided_by, r.version, r.created_at, r.decided_at,
+                   ARRAY(
+                       SELECT ref.evidence_id
+                       FROM review_evidence_reference ref
+                       WHERE ref.tenant_id = r.tenant_id AND ref.review_task_id = r.id
+                       ORDER BY ref.created_at, ref.evidence_id
+                   ) AS cited_evidence_ids
+            FROM review_task r
             """;
+
+    private java.util.Map<String, Object> readJson(String json) throws SQLException {
+        try {
+            return objectMapper.readValue(json, new TypeReference<>() {});
+        } catch (JacksonException exception) {
+            throw new SQLException("Invalid observation payload", exception);
+        }
+    }
 }

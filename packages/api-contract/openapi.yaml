@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: OriginGuard API
-  version: 0.6.0
-  description: M3.2 contract with a three-skill deterministic media analysis pipeline inside the Agent Harness.
+  version: 0.7.0
+  description: M3.3 contract connecting Agent observations to formal case evidence and cited review decisions.
 servers:
   - url: http://localhost:8080
 paths:
@@ -334,6 +334,26 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationFailed' }
+  /api/v1/cases/{caseId}/evidence/from-agent:
+    parameters:
+      - $ref: '#/components/parameters/CaseId'
+    post:
+      operationId: promoteAgentObservationToEvidence
+      tags: [Investigation, Agent]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PromoteAgentObservationRequest' }
+      responses:
+        '200':
+          description: Agent observation explicitly included as formal case evidence
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InvestigationEvidence' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/v1/cases/{caseId}/reviews/{taskId}/decision:
     parameters:
       - $ref: '#/components/parameters/CaseId'
@@ -697,11 +717,12 @@ components:
       properties:
         id: { type: string, format: uuid }
         assetId: { type: string, format: uuid }
-        evidenceType: { type: string, enum: [HUMAN_OBSERVATION] }
+        evidenceType: { type: string, enum: [HUMAN_OBSERVATION, AGENT_OBSERVATION] }
         title: { type: string }
         observation: { type: string }
         conclusion: { $ref: '#/components/schemas/EvidenceConclusion' }
         confidence: { $ref: '#/components/schemas/EvidenceConfidence' }
+        sourceObservationId: { type: [string, 'null'], format: uuid }
         createdBy: { type: string, format: uuid }
         createdAt: { type: string, format: date-time }
     ReviewStatus:
@@ -717,12 +738,15 @@ components:
         decisionReason: { type: string }
         createdBy: { type: string, format: uuid }
         decidedBy: { type: [string, 'null'], format: uuid }
+        citedEvidenceIds:
+          type: array
+          items: { type: string, format: uuid }
         version: { type: integer, format: int64, minimum: 0 }
         createdAt: { type: string, format: date-time }
         decidedAt: { type: [string, 'null'], format: date-time }
     WorkflowView:
       type: object
-      required: [evidence, reviewTasks]
+      required: [evidence, reviewTasks, agentEvidenceCandidates]
       properties:
         evidence:
           type: array
@@ -730,13 +754,40 @@ components:
         reviewTasks:
           type: array
           items: { $ref: '#/components/schemas/ReviewTask' }
+        agentEvidenceCandidates:
+          type: array
+          items: { $ref: '#/components/schemas/AgentEvidenceCandidate' }
+    AgentEvidenceCandidate:
+      type: object
+      required: [observationId, taskId, assetId, evidenceType, summary, payload, createdAt]
+      properties:
+        observationId: { type: string, format: uuid }
+        taskId: { type: string, format: uuid }
+        assetId: { type: string, format: uuid }
+        evidenceType: { type: string, enum: [FILE_INTEGRITY, IMAGE_METADATA, PERCEPTUAL_SIMILARITY] }
+        summary: { type: string }
+        payload: { type: object, additionalProperties: true }
+        promotedEvidenceId: { type: [string, 'null'], format: uuid }
+        createdAt: { type: string, format: date-time }
+    PromoteAgentObservationRequest:
+      type: object
+      additionalProperties: false
+      required: [observationId, version]
+      properties:
+        observationId: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
     ReviewDecisionRequest:
       type: object
       additionalProperties: false
-      required: [decision, taskVersion, caseVersion]
+      required: [decision, citedEvidenceIds, taskVersion, caseVersion]
       properties:
         decision: { type: string, enum: [APPROVED, REJECTED] }
         reason: { type: string, maxLength: 2000, default: '' }
+        citedEvidenceIds:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: { type: string, format: uuid }
         taskVersion: { type: integer, format: int64, minimum: 0 }
         caseVersion: { type: integer, format: int64, minimum: 0 }
     AuditEntry:
