@@ -1,11 +1,89 @@
 openapi: 3.1.0
 info:
   title: OriginGuard API
-  version: 0.7.0
-  description: M3.3 contract connecting Agent observations to formal case evidence and cited review decisions.
+  version: 0.9.0
+  description: M4.2 contract adding RAG debug search and retrieval evaluation baselines.
 servers:
   - url: http://localhost:8080
 paths:
+  /api/v1/rag/debug-search:
+    post:
+      operationId: debugRagSearch
+      tags: [Knowledge]
+      responses:
+        '200': { description: Tenant-scoped Top-K hybrid retrieval with score explanations }
+  /api/v1/rag/evaluation-cases:
+    get:
+      operationId: listRagEvaluationCases
+      tags: [Knowledge]
+      responses:
+        '200': { description: Current tenant evaluation cases }
+    post:
+      operationId: createRagEvaluationCase
+      tags: [Knowledge]
+      responses:
+        '201': { description: Evaluation case created against a published document or chunk }
+  /api/v1/rag/evaluation-runs:
+    post:
+      operationId: runRagEvaluation
+      tags: [Knowledge]
+      responses:
+        '200': { description: Recall@K, MRR and isolation/integrity checks }
+  /api/v1/knowledge-documents:
+    get:
+      operationId: listKnowledgeDocuments
+      tags: [Knowledge]
+      responses:
+        '200': { description: Tenant-scoped knowledge; drafts require knowledge:upload }
+    post:
+      operationId: createKnowledgeDocument
+      tags: [Knowledge]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/KnowledgeDocumentRequest' }
+      responses:
+        '201': { description: Draft created }
+  /api/v1/knowledge-documents/reindex:
+    post:
+      operationId: reindexPublishedKnowledge
+      tags: [Knowledge]
+      responses:
+        '200': { description: Current published chunks embedded with the active provider }
+  /api/v1/knowledge-documents/{documentId}:
+    get:
+      operationId: getKnowledgeDocument
+      tags: [Knowledge]
+      parameters:
+        - { name: documentId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Knowledge document }
+    patch:
+      operationId: updateKnowledgeDraft
+      tags: [Knowledge]
+      parameters:
+        - { name: documentId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/KnowledgeDocumentRequest' }
+      responses:
+        '200': { description: Draft updated with optimistic locking }
+  /api/v1/knowledge-documents/{documentId}/publish:
+    post:
+      operationId: publishKnowledgeDocument
+      tags: [Knowledge]
+      parameters:
+        - { name: documentId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VersionRequest' }
+      responses:
+        '200': { description: Published and indexed into FTS and pgvector }
   /api/v1/health:
     get:
       operationId: getHealth
@@ -530,6 +608,21 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ApiError' }
   schemas:
+    KnowledgeDocumentRequest:
+      type: object
+      additionalProperties: false
+      required: [title, documentType, content, version]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 200 }
+        documentType: { type: string, enum: [FORENSIC_GUIDE, POLICY, MODEL_CARD, OTHER] }
+        content: { type: string, minLength: 1, maxLength: 100000 }
+        version: { type: integer, format: int64, minimum: 0 }
+    VersionRequest:
+      type: object
+      additionalProperties: false
+      required: [version]
+      properties:
+        version: { type: integer, format: int64, minimum: 0 }
     HealthResponse:
       type: object
       required: [status, service, timestamp]
@@ -865,9 +958,40 @@ components:
         checkpointVersion: { type: integer, minimum: 1 }
         state: { type: object, additionalProperties: true }
         createdAt: { type: string, format: date-time }
+    AgentKnowledgeCitation:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        documentId: { type: string, format: uuid }
+        chunkId: { type: string, format: uuid }
+        documentTitle: { type: string }
+        documentType: { type: string }
+        documentVersion: { type: integer }
+        chunkIndex: { type: integer }
+        quote: { type: string }
+        semanticScore: { type: number }
+        keywordScore: { type: number }
+        hybridScore: { type: number }
+        citationOrder: { type: integer }
+    AgentKnowledgeRetrieval:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        taskId: { type: string, format: uuid }
+        caseId: { type: string, format: uuid }
+        skillCode: { type: string }
+        toolCode: { type: string }
+        query: { type: string }
+        retrievalMode: { type: string }
+        embeddingProvider: { type: string }
+        knowledgeAvailable: { type: boolean }
+        citations:
+          type: array
+          items: { $ref: '#/components/schemas/AgentKnowledgeCitation' }
+        createdAt: { type: string, format: date-time }
     AgentTaskDetails:
       type: object
-      required: [task, steps, observations, checkpoints]
+      required: [task, steps, observations, knowledgeRetrievals, checkpoints]
       properties:
         task: { $ref: '#/components/schemas/AgentTask' }
         steps:
@@ -876,6 +1000,9 @@ components:
         observations:
           type: array
           items: { $ref: '#/components/schemas/AgentObservation' }
+        knowledgeRetrievals:
+          type: array
+          items: { $ref: '#/components/schemas/AgentKnowledgeRetrieval' }
         checkpoints:
           type: array
           items: { $ref: '#/components/schemas/AgentCheckpoint' }
@@ -886,7 +1013,7 @@ components:
       properties:
         caseId: { type: string, format: uuid }
         goal: { type: string, minLength: 1, maxLength: 500 }
-        stepBudget: { type: integer, minimum: 7, maximum: 10 }
+        stepBudget: { type: integer, minimum: 9, maximum: 12 }
     AgentTaskVersionRequest:
       type: object
       additionalProperties: false

@@ -50,6 +50,35 @@ export interface AgentObservation {
   createdAt: string
 }
 
+export interface AgentKnowledgeCitation {
+  id: string
+  documentId: string
+  chunkId: string
+  documentTitle: string
+  documentType: string
+  documentVersion: number
+  chunkIndex: number
+  quote: string
+  semanticScore: number
+  keywordScore: number
+  hybridScore: number
+  citationOrder: number
+}
+
+export interface AgentKnowledgeRetrieval {
+  id: string
+  taskId: string
+  caseId: string
+  skillCode: string
+  toolCode: string
+  query: string
+  retrievalMode: string
+  embeddingProvider: string
+  knowledgeAvailable: boolean
+  citations: AgentKnowledgeCitation[]
+  createdAt: string
+}
+
 export interface AgentCheckpoint {
   id: string
   taskId: string
@@ -62,5 +91,6 @@ export interface AgentTaskDetails {
   task: AgentTask
   steps: AgentStep[]
   observations: AgentObservation[]
+  knowledgeRetrievals: AgentKnowledgeRetrieval[]
   checkpoints: AgentCheckpoint[]
 }

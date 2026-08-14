@@ -146,8 +146,9 @@ public class InvestigationWorkflowRepository {
                         LEFT JOIN investigation_evidence e
                           ON e.source_observation_id = o.id AND e.tenant_id = o.tenant_id
                         WHERE o.tenant_id = :tenantId
-                          AND o.case_id = :caseId
-                          AND t.status = 'COMPLETED'
+                            AND o.case_id = :caseId
+                            AND t.status = 'COMPLETED'
+                            AND o.evidence_type <> 'LEGACY_RAG_GUIDANCE'
                         ORDER BY o.created_at, o.sequence_number
                         """)
                 .param("tenantId", tenantId)

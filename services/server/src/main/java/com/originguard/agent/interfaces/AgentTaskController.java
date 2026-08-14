@@ -67,7 +67,7 @@ public class AgentTaskController {
     public record CreateAgentTaskRequest(
             @NotNull UUID caseId,
             @NotBlank @Size(max = 500) String goal,
-            @Min(7) @Max(10) int stepBudget) {}
+            @Min(9) @Max(12) int stepBudget) {}
 
     public record VersionRequest(@Min(0) long version) {}
 }

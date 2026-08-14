@@ -1,8 +1,24 @@
 # OriginGuard
 
+> 当前状态：M4.3 已接入本地真实 Embedding。`BAAI/bge-small-zh-v1.5` 由 Python Model API 生成 512 维向量，Java 后端通过版本化 Provider 向量表完成 pgvector 混合检索；模型与缓存位于项目 `.runtime`，不会提交到 Git。
+
+真实 Embedding 本地启动：
+
+```powershell
+docker compose up -d postgres
+.\scripts\start-model-api.ps1
+
+$env:EMBEDDING_PROVIDER='bge-small-zh-v1.5'
+$env:MODEL_API_BASE_URL='http://127.0.0.1:8090'
+cd services/server
+.\mvnw.cmd spring-boot:run
+```
+
+详见 [M4.3 本地真实 Embedding](docs/product/m4.3-real-embedding.md)。
+
 OriginGuard 是一个面向内容审核与数字取证场景的 AIGC 内容真实性检测、篡改分析和来源溯源平台。
 
-> 当前状态：M3.3 已完成；调查员可将 Agent Observation 明确纳入正式案件证据，审核员必须引用正式证据后才能提交决定，Agent 结果仍不会自动形成真实性结论。
+> 当前状态：M4.2 已完成；RAG 具备独立检索调试、Top-K 分数解释、Recall@K/MRR 评测基线和租户/草稿/Citation 安全完整性检查。
 
 ## 当前包含
 
@@ -25,6 +41,9 @@ OriginGuard 是一个面向内容审核与数字取证场景的 AIGC 内容真�
 - `AgentTask → Context Builder → Fake Planner → Skill → Real Media Tool → Observation → Checkpoint → Trace` 完整链路
 - 版本化 Skill、Tool 白名单、权限/案件状态策略和 Step Budget
 - Agent 任务列表、结构化结论、Observation、Checkpoint 与逐步 Trace 页面
+- Markdown/纯文本知识草稿、发布、确定性切片、64 维本地向量与 HNSW/GIN 索引
+- `retrieve_forensic_guidance` Skill、租户/发布版本过滤、混合召回和可追溯引用
+- 可替换 `EmbeddingProvider`、RAG 调试检索页面、评测用例与 Recall@K/MRR 基线
 
 ## 仓库结构
 
@@ -116,6 +135,8 @@ reviewer → 查看证据与审核任务 → 通过或填写理由驳回
 调查员先上传新的 JPEG/PNG 媒体并关联案件，将已分派给自己的案件推进到 `INVESTIGATING`，然后点击“运行 Agent”。任务会同步执行确定性流程并跳转到 Trace 页面。具有 `agent:trace:read` 权限的用户也可从“Agent 任务”导航查看租户内任务。
 
 Fake Planner 仍不调用 LLM，但会固定编排 `verify_media_integrity`、`extract_image_metadata`、`compare_perceptual_similarity` 三个版本化 Skill。对应 Tool 都会读取 MinIO 中的真实字节；由于这些确定性事实不是 AIGC 分类证据，真实性结论仍为 `INCONCLUSIVE`。实现说明见 [M3.2 多确定性 Skill](docs/product/m3.2-deterministic-media-skills.md)。
+
+M4.1 起，Fake Planner 还会执行第四个 `retrieve_forensic_guidance` Skill，从当前租户已发布知识中进行 PostgreSQL 全文检索与 pgvector 混合召回。结果独立保存为 Knowledge Retrieval/Citation，供 Agent/LLM 解释媒体 Observation 和制定调查方案，不能直接纳入案件证据。第一版使用本地确定性向量，不调用 LLM、不下载模型；它用于验证知识发布、过滤、引用、Trace 与 Harness 链路，不能等同于生产级语义检索。实现说明见 [M4.1 RAG 第一版](docs/product/m4.1-rag-foundation.md)。
 
 ## M3.3 Observation、正式证据与审核引用
 

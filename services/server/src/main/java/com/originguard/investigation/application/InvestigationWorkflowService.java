@@ -299,6 +299,7 @@ public class InvestigationWorkflowService {
             case "FILE_INTEGRITY" -> "Agent：文件完整性核验";
             case "IMAGE_METADATA" -> "Agent：图片元数据观察";
             case "PERCEPTUAL_SIMILARITY" -> "Agent：感知相似度观察";
+            case "RAG_GUIDANCE" -> "Agent：RAG 取证指引引用";
             default -> "Agent：确定性媒体观察";
         };
     }

@@ -2,10 +2,10 @@
 
 > **项目全称**：OriginGuard——AIGC 内容真实性检测、篡改分析与来源溯源 Agent 平台  
 > **目标岗位**：Java 后端开发 / AI Agent 应用开发 / AI 安全工程 / 多媒体内容安全  
-> **文档版本**：v2.6
+> **文档版本**：v2.9
 > **制定日期**：2026-08-01  
-> **最近更新**：2026-08-12
-> **当前状态**：M3.3 Agent Observation、正式证据与审核引用闭环已完成
+> **最近更新**：2026-08-14
+> **当前状态**：M4.3 本地真实 Embedding 已完成，真实 LLM Planner 尚未接入
 > **实施目标**：从零实现可测试、可恢复、可审计的 Agent Harness，使用真实性调查业务验证 Skills、Tools、RAG、Checkpoint、Policy 与 Human-in-the-loop 全流程
 > **项目形态**：GitHub 开源 Monorepo、前后端分离、Java 业务与 Agent 中枢、Python 算法服务、Docker Compose 一键启动
 
@@ -13,7 +13,33 @@
 
 # 0. 本版计划书的调整
 
-## 0.1 v2.6 相较于 v2.5 的调整
+## 0.0 v2.9 相较于 v2.8 的调整
+
+1. Python `model-api` 接入本地 `BAAI/bge-small-zh-v1.5`，输出 512 维归一化真实语义向量。
+2. Java 新增 HTTP Embedding Provider，RAG 的发布、检索和评测默认使用真实模型，确定性 Hash 保留为显式测试基线。
+3. Chunk 与 Embedding 拆分为一对多 Provider 数据结构；旧 64 维向量不丢失，已有 Chunk ID、Citation 和评测用例保持有效。
+4. 新增租户范围内的已发布知识重新向量化入口，为后续替换 Embedding 模型提供迁移能力。
+5. 模型、Python 运行环境、缓存与临时文件统一保存在项目 `.runtime`，不提交 GitHub。
+6. 下一阶段进入真实 LLM Planner：LLM 基于案件上下文与 RAG 建议调用哪些已注册 AIGC 模型，Harness 校验并执行，LLM 最后汇总检测结果但不替代人工裁决。
+
+## 0.1 v2.8 相较于 v2.7 的调整
+
+1. 抽象 `EmbeddingProvider`，当前确定性 Hash 实现作为可复现基线和降级方案。
+2. 新增 RAG 调试检索 API/页面，单独查看 Top-K Chunk、引用及 Vector/FTS/Hybrid 分数。
+3. 支持将问题和期望文档/Chunk 保存为评测用例。
+4. 新增 Recall@K、MRR 指标和逐用例排名结果。
+5. 每次评测同步检查租户隔离、草稿排除和 Citation 完整性，为替换真实 Embedding 提供对比基线。
+
+## 0.2 v2.7 相较于 v2.6 的调整
+
+1. 管理员可录入并发布 Markdown/纯文本取证知识；调查员与审核员只读取已发布版本。
+2. 发布时确定性切片，并将 PostgreSQL `tsvector` 与 pgvector 64 维向量写入版本化 Chunk。
+3. 检索强制执行租户、发布状态和当前发布版本过滤，使用 FTS 与余弦相似度混合排序。
+4. Fake Planner 新增 `retrieve_forensic_guidance` Skill，输出包含文档、Chunk、版本和原文的 Knowledge Retrieval/Citation。
+5. RAG 结果作为 Agent/LLM 的知识上下文独立保存，不属于案件 Observation，也不能直接纳入正式证据。
+6. 第一版使用本地确定性 Feature Hashing，不调用 LLM、不下载模型；真实 Embedding 与检索评测留给下一阶段。
+
+## 0.3 v2.6 相较于 v2.5 的调整
 
 1. Agent Observation 作为候选材料进入案件页面，但不会自动成为正式证据。
 2. 分派调查员可在调查状态逐条纳入 Observation，并保留原 Observation ID 和完整溯源关系。
@@ -21,7 +47,7 @@
 4. 审核员提交决定时必须选择至少一条正式案件证据，并永久保存引用关系。
 5. V7 新增 Observation 唯一纳入约束与审核证据引用表，审计日志记录纳入和引用行为。
 
-## 0.2 v2.5 相较于 v2.4 的调整
+## 0.4 v2.5 相较于 v2.4 的调整
 
 1. Fake Planner 从固定选择单一 Skill 升级为固定编排三个版本化 Skill，但仍不调用 LLM。
 2. `verify_media_integrity` 重新读取 MinIO 原始字节并核验 SHA-256、字节数与 MIME。
@@ -30,7 +56,7 @@
 5. 每个 Skill 分别执行 Policy 与 Tool 白名单检查，并持久化 Observation 和 Checkpoint；任务预算下限调整为 7。
 6. 新结果不等同于 AIGC 判断，最终结论继续保持 `INCONCLUSIVE`。
 
-## 0.3 v2.4 相较于 v2.3 的调整
+## 0.5 v2.4 相较于 v2.3 的调整
 
 1. 新增 MinIO 对象存储和 multipart 上传，服务端不再只相信浏览器提交的文件元数据。
 2. 新上传限制为 JPEG/PNG、25 MB，并执行魔数、声明 MIME、ImageIO 解码、40MP 像素上限和服务端 SHA-256 复核。
@@ -39,14 +65,14 @@
 5. Tool 会从 MinIO 读取真实字节并重新检查，Observation 类型升级为 `BASIC_MEDIA_FORENSICS`。
 6. C2PA sidecar、AIGC 分类、篡改定位、视频与 RAG 仍未接入，结论继续保持 `INCONCLUSIVE`。
 
-## 0.4 v2.3 相较于 v2.2 的调整
+## 0.6 v2.3 相较于 v2.2 的调整
 
 1. 记录 M2.1 已落地：AgentTask/Step/Observation/Checkpoint 持久化、Context Builder、Fake Planner、版本化 Skill、受控 Mock Tool、Policy Engine、Step Budget 与前端 Trace。
 2. 当前结论保持 `INCONCLUSIVE`，明确它是 Harness 工程验证而不是真实 AIGC 检测结果。
 3. 下一阶段优先接入受控媒体存储、授权预览和基础取证 Tool，让 Agent 从登记元数据转向真实媒体 Observation。
-4. 真实 LLM Planner、RAG 与算法模型继续延后，沿用可替换适配器逐步替换确定性组件的路线。
+4. 真实 LLM Planner、混合 RAG 与算法模型继续延后，沿用可替换适配器逐步替换确定性组件的路线。
 
-## 0.5 v2.2 相较于 v2.1 的调整
+## 0.7 v2.2 相较于 v2.1 的调整
 
 1. 明确项目第一目标是从零实现并理解完整 Agent Harness，而不是把 Agent 作为普通内容审核系统完成后的附加功能。
 2. 真实性调查是 Harness 的真实承载场景；单一“是否 AI 生成”分类不足以证明 Agent 的必要性，Agent 应负责按案件上下文选择调查 Skills、调用受控 Tools、按需检索 RAG、聚合冲突证据并生成结构化调查草稿。
@@ -57,7 +83,7 @@
 7. 媒体真实存储、预览和最终裁决展示仍是必要产品能力，但作为 Harness 的输入与输出展示层并行演进，不再推迟 Harness 主体开发。
 8. 当前 M1.2 已完成职责分派、人工证据、独立审核和审计，为 Agent 的身份继承、证据落库、Human-in-the-loop 与 Trace 提供业务边界。
 
-## 0.6 v2.1 相较于 v2.0 的调整
+## 0.8 v2.1 相较于 v2.0 的调整
 
 1. v1.0 角色由五个收敛为三个：`INVESTIGATOR`、`REVIEWER`、`ADMIN`。
 2. 原 `MODEL_OPERATOR` 的模型管理职责并入 `ADMIN`，原 `AUDITOR` 暂不作为独立角色实现。

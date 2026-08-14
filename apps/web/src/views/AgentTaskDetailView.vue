@@ -116,19 +116,34 @@ onMounted(load)
 
       <section class="detail-grid agent-detail-grid">
         <article class="panel">
-          <div class="section-heading"><div><h2>Observations</h2><p>结构化工具观察</p></div></div>
+          <div class="section-heading"><div><h2>Observations</h2><p>当前案件的媒体事实，可由调查员确认纳入证据</p></div></div>
           <div v-for="item in details.observations" :key="item.id" class="observation-card">
             <el-tag>{{ item.evidenceType }}</el-tag><p>{{ item.summary }}</p><pre>{{ JSON.stringify(item.payload, null, 2) }}</pre>
           </div>
           <el-empty v-if="!details.observations.length" description="暂无 Observation" />
         </article>
         <article class="panel">
+          <div class="section-heading"><div><h2>知识检索与引用</h2><p>用于解释事实和制定调查方案，不是案件 Observation 或正式证据</p></div></div>
+          <div v-for="retrieval in details.knowledgeRetrievals" :key="retrieval.id" class="observation-card">
+            <el-tag type="info">RAG CONTEXT</el-tag>
+            <p><strong>{{ retrieval.retrievalMode }}</strong> · {{ retrieval.embeddingProvider }}</p>
+            <p>Query：{{ retrieval.query }}</p>
+            <article v-for="citation in retrieval.citations" :key="citation.id" class="checkpoint-card">
+              <strong>[{{ citation.citationOrder }}] {{ citation.documentTitle }} · v{{ citation.documentVersion }} · Chunk {{ citation.chunkIndex }}</strong>
+              <p>{{ citation.quote }}</p>
+              <small>Hybrid {{ citation.hybridScore.toFixed(4) }} · Vector {{ citation.semanticScore.toFixed(4) }} · FTS {{ citation.keywordScore.toFixed(4) }}</small>
+            </article>
+          </div>
+          <el-empty v-if="!details.knowledgeRetrievals.length" description="暂无知识检索记录" />
+        </article>
+      </section>
+
+      <section class="panel">
           <div class="section-heading"><div><h2>Checkpoints</h2><p>可恢复状态快照</p></div></div>
           <div v-for="item in details.checkpoints" :key="item.id" class="checkpoint-card">
             <strong>Checkpoint v{{ item.checkpointVersion }}</strong><small>{{ formatDate(item.createdAt) }}</small><pre>{{ JSON.stringify(item.state, null, 2) }}</pre>
           </div>
           <el-empty v-if="!details.checkpoints.length" description="暂无 Checkpoint" />
-        </article>
       </section>
     </template>
   </main>

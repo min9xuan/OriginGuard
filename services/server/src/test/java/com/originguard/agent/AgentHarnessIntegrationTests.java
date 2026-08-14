@@ -34,7 +34,7 @@ import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
-@SpringBootTest
+@SpringBootTest(properties = "originguard.embedding.provider=deterministic")
 @AutoConfigureMockMvc
 @ActiveProfiles("local")
 @Testcontainers
@@ -68,19 +68,21 @@ class AgentHarnessIntegrationTests {
 
     @Test
     void fakePlannerRealMediaToolCheckpointAndTraceCompleteVerticalSlice() throws Exception {
+        String admin = token("admin");
         String investigator = token("investigator");
         String reviewer = token("reviewer");
+        publishKnowledge(admin);
         String caseId = investigatingCase(investigator, "Agent Harness 纵向切片");
 
         MvcResult created = mockMvc.perform(post("/api/v1/agent-tasks")
                         .header("Authorization", bearer(investigator))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"caseId":"%s","goal":"运行确定性媒体分析流水线","stepBudget":7}
+                                {"caseId":"%s","goal":"运行确定性媒体分析与 RAG 流水线","stepBudget":9}
                                 """.formatted(caseId)))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.task.status").value("PENDING"))
-                .andExpect(jsonPath("$.task.remainingStepBudget").value(7))
+                .andExpect(jsonPath("$.task.remainingStepBudget").value(9))
                 .andReturn();
         String taskId = JsonPath.read(created.getResponse().getContentAsString(), "$.task.id");
 
@@ -90,12 +92,12 @@ class AgentHarnessIntegrationTests {
                         .content("{\"version\":0}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.task.status").value("COMPLETED"))
-                .andExpect(jsonPath("$.task.selectedSkillCode").value("deterministic_media_pipeline"))
-                .andExpect(jsonPath("$.task.selectedSkillVersion").value("1.0.0"))
+                .andExpect(jsonPath("$.task.selectedSkillCode").value("deterministic_media_rag_pipeline"))
+                .andExpect(jsonPath("$.task.selectedSkillVersion").value("1.1.0"))
                 .andExpect(jsonPath("$.task.remainingStepBudget").value(0))
-                .andExpect(jsonPath("$.task.checkpointVersion").value(3))
+                .andExpect(jsonPath("$.task.checkpointVersion").value(4))
                 .andExpect(jsonPath("$.task.conclusion.verdict").value("INCONCLUSIVE"))
-                .andExpect(jsonPath("$.steps.length()").value(15))
+                .andExpect(jsonPath("$.steps.length()").value(19))
                 .andExpect(jsonPath("$.steps[*].stepType", hasItem("TOOL_CALLED")))
                 .andExpect(jsonPath("$.steps[*].stepType", hasItem("CHECKPOINT_SAVED")))
                 .andExpect(jsonPath("$.observations.length()").value(3))
@@ -107,8 +109,18 @@ class AgentHarnessIntegrationTests {
                 .andExpect(jsonPath("$.observations[1].payload.findings[0].height").value(3))
                 .andExpect(jsonPath("$.observations[2].evidenceType").value("PERCEPTUAL_SIMILARITY"))
                 .andExpect(jsonPath("$.observations[2].payload.comparisonCount").value(0))
-                .andExpect(jsonPath("$.checkpoints.length()").value(3))
-                .andExpect(jsonPath("$.checkpoints[2].state.remainingStepBudget").value(1))
+                .andExpect(jsonPath("$.knowledgeRetrievals.length()").value(1))
+                .andExpect(jsonPath("$.knowledgeRetrievals[0].skillCode")
+                        .value("retrieve_forensic_guidance"))
+                .andExpect(jsonPath("$.knowledgeRetrievals[0].knowledgeAvailable").value(true))
+                .andExpect(jsonPath("$.knowledgeRetrievals[0].citations[0].documentTitle")
+                        .value("AIGC 媒体人工复核指引"))
+                .andExpect(jsonPath("$.knowledgeRetrievals[0].citations[0].documentVersion").value(1))
+                .andExpect(jsonPath("$.knowledgeRetrievals[0].citations[0].chunkId").isNotEmpty())
+                .andExpect(jsonPath("$.checkpoints.length()").value(4))
+                .andExpect(jsonPath("$.checkpoints[3].state.remainingStepBudget").value(1))
+                .andExpect(jsonPath("$.checkpoints[3].state.observationIds.length()").value(3))
+                .andExpect(jsonPath("$.checkpoints[3].state.knowledgeRetrievalIds.length()").value(1))
                 .andReturn();
         String observationId = JsonPath.read(
                 completed.getResponse().getContentAsString(), "$.observations[0].id");
@@ -138,13 +150,14 @@ class AgentHarnessIntegrationTests {
                         .header("Authorization", bearer(reviewer)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.evidence[0].evidenceType").value("AGENT_OBSERVATION"))
+                .andExpect(jsonPath("$.agentEvidenceCandidates.length()").value(3))
                 .andExpect(jsonPath("$.agentEvidenceCandidates[0].promotedEvidenceId").isNotEmpty());
 
         mockMvc.perform(get("/api/v1/agent-tasks/{id}", taskId)
                         .header("Authorization", bearer(reviewer)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.task.status").value("COMPLETED"))
-                .andExpect(jsonPath("$.steps.length()").value(15));
+                .andExpect(jsonPath("$.steps.length()").value(19));
 
         mockMvc.perform(get("/api/v1/cases/{id}/audit", caseId)
                         .header("Authorization", bearer(reviewer)))
@@ -167,7 +180,7 @@ class AgentHarnessIntegrationTests {
                         .header("Authorization", bearer(investigator))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"caseId":"%s","goal":"比较案件图片相似度","stepBudget":7}
+                                {"caseId":"%s","goal":"比较案件图片相似度","stepBudget":9}
                                 """.formatted(caseId)))
                 .andExpect(status().isCreated())
                 .andReturn();
@@ -188,6 +201,56 @@ class AgentHarnessIntegrationTests {
     }
 
     @Test
+    void ragDebugSearchAndEvaluationBaselineExposeRankingAndSafetyChecks() throws Exception {
+        String admin = token("admin");
+        publishKnowledge(admin);
+
+        MvcResult debug = mockMvc.perform(post("/api/v1/rag/debug-search")
+                        .header("Authorization", bearer(admin))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"query":"EXIF 缺失能否单独证明图片由 AI 生成","topK":5}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.embeddingProvider").value("LOCAL_DETERMINISTIC_HASH_V1"))
+                .andExpect(jsonPath("$.results[0].documentId").isNotEmpty())
+                .andExpect(jsonPath("$.results[0].semanticScore").isNumber())
+                .andExpect(jsonPath("$.results[0].keywordScore").isNumber())
+                .andExpect(jsonPath("$.results[0].hybridScore").isNumber())
+                .andReturn();
+        String documentId = JsonPath.read(debug.getResponse().getContentAsString(), "$.results[0].documentId");
+        String chunkId = JsonPath.read(debug.getResponse().getContentAsString(), "$.results[0].chunkId");
+
+        mockMvc.perform(post("/api/v1/rag/evaluation-cases")
+                        .header("Authorization", bearer(admin))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "name":"EXIF 缺失判断",
+                                  "query":"EXIF 缺失能否单独证明图片由 AI 生成",
+                                  "expectedDocumentId":"%s",
+                                  "expectedChunkId":"%s"
+                                }
+                                """.formatted(documentId, chunkId)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.expectedDocumentId").value(documentId))
+                .andExpect(jsonPath("$.expectedChunkId").value(chunkId));
+
+        mockMvc.perform(post("/api/v1/rag/evaluation-runs")
+                        .header("Authorization", bearer(admin))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"topK\":5}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.caseCount").value(1))
+                .andExpect(jsonPath("$.recallAtK").value(1.0))
+                .andExpect(jsonPath("$.mrr").value(1.0))
+                .andExpect(jsonPath("$.tenantIsolationPassed").value(true))
+                .andExpect(jsonPath("$.draftExclusionPassed").value(true))
+                .andExpect(jsonPath("$.citationIntegrityPassed").value(true))
+                .andExpect(jsonPath("$.caseResults[0].firstRelevantRank").value(1));
+    }
+
+    @Test
     void agentCreationRequiresInvestigatorPermissionAssignmentAndInvestigatingStatus() throws Exception {
         String investigator = token("investigator");
         String reviewer = token("reviewer");
@@ -195,7 +258,7 @@ class AgentHarnessIntegrationTests {
         String draftCaseId = createCase(investigator, "状态限制", assetId);
 
         String request = """
-                {"caseId":"%s","goal":"不应运行","stepBudget":7}
+                {"caseId":"%s","goal":"不应运行","stepBudget":9}
                 """.formatted(draftCaseId);
         mockMvc.perform(post("/api/v1/agent-tasks")
                         .header("Authorization", bearer(investigator))
@@ -218,7 +281,7 @@ class AgentHarnessIntegrationTests {
                         .header("Authorization", bearer(investigator))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"caseId":"%s","goal":"稍后取消","stepBudget":7}
+                                {"caseId":"%s","goal":"稍后取消","stepBudget":9}
                                 """.formatted(caseId)))
                 .andExpect(status().isCreated())
                 .andReturn();
@@ -269,6 +332,34 @@ class AgentHarnessIntegrationTests {
         transition(token, caseId, "READY", 0);
         transition(token, caseId, "INVESTIGATING", 1);
         return caseId;
+    }
+
+    private String publishKnowledge(String token) throws Exception {
+        MvcResult created = mockMvc.perform(post("/api/v1/knowledge-documents")
+                        .header("Authorization", bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "title":"AIGC 媒体人工复核指引",
+                                  "documentType":"FORENSIC_GUIDE",
+                                  "content":"# 复核原则\\n\\n文件完整性、EXIF 元数据和感知相似度只能作为辅助事实。审核员应结合来源链、模型检测结果与上下文进行判断，不得只凭单项指标认定 AI 生成。",
+                                  "version":0
+                                }
+                                """))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("DRAFT"))
+                .andReturn();
+        String documentId = JsonPath.read(created.getResponse().getContentAsString(), "$.id");
+        mockMvc.perform(post("/api/v1/knowledge-documents/{id}/publish", documentId)
+                        .header("Authorization", bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"version\":0}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.document.status").value("PUBLISHED"))
+                .andExpect(jsonPath("$.document.publishedVersion").value(1))
+                .andExpect(jsonPath("$.chunkCount").value(1))
+                .andExpect(jsonPath("$.embeddingProvider").value("LOCAL_DETERMINISTIC_HASH_V1"));
+        return documentId;
     }
 
     private String registerAsset(String token) throws Exception {

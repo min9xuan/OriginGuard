@@ -14,6 +14,7 @@ public class SkillRegistry {
     public static final String INTEGRITY_SKILL = "verify_media_integrity";
     public static final String METADATA_SKILL = "extract_image_metadata";
     public static final String SIMILARITY_SKILL = "compare_perceptual_similarity";
+    public static final String RAG_SKILL = "retrieve_forensic_guidance";
     public static final String SKILL_VERSION = "1.0.0";
 
     private final Map<String, SkillDefinition> skills;
@@ -33,7 +34,12 @@ public class SkillRegistry {
                 new SkillDefinition(
                         SIMILARITY_SKILL, SKILL_VERSION,
                         "Compare 64-bit difference hashes for media linked to the same case",
-                        permissions, statuses, Set.of(PerceptualSimilarityTool.CODE), 2));
+                        permissions, statuses, Set.of(PerceptualSimilarityTool.CODE), 2),
+                new SkillDefinition(
+                        RAG_SKILL, SKILL_VERSION,
+                        "Retrieve published forensic guidance with versioned chunk citations",
+                        Set.of("agent:run", "case:read", "knowledge:read"), statuses,
+                        Set.of(ForensicGuidanceRetrievalTool.CODE), 2));
         skills = definitions.stream().collect(Collectors.toUnmodifiableMap(
                 SkillDefinition::code, Function.identity()));
     }

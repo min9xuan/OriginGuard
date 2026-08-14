@@ -1,6 +1,8 @@
 package com.originguard.agent.infrastructure;
 
 import com.originguard.agent.domain.AgentCheckpoint;
+import com.originguard.agent.domain.AgentKnowledgeCitation;
+import com.originguard.agent.domain.AgentKnowledgeRetrieval;
 import com.originguard.agent.domain.AgentObservation;
 import com.originguard.agent.domain.AgentStep;
 import com.originguard.agent.domain.AgentTask;
@@ -218,6 +220,61 @@ public class AgentTaskRepository {
         return findObservation(tenantId, taskId, id).orElseThrow();
     }
 
+    public AgentKnowledgeRetrieval insertKnowledgeRetrieval(
+            UUID tenantId,
+            UUID taskId,
+            UUID caseId,
+            String skillCode,
+            String toolCode,
+            String query,
+            String retrievalMode,
+            String embeddingProvider,
+            boolean knowledgeAvailable,
+            List<Map<String, Object>> citations) {
+        UUID retrievalId = UUID.randomUUID();
+        jdbcClient.sql("""
+                        INSERT INTO agent_knowledge_retrieval(
+                            id, tenant_id, task_id, case_id, skill_code, tool_code, query,
+                            retrieval_mode, embedding_provider, knowledge_available
+                        ) VALUES (
+                            :id, :tenantId, :taskId, :caseId, :skillCode, :toolCode, :query,
+                            :retrievalMode, :embeddingProvider, :knowledgeAvailable
+                        )
+                        """)
+                .param("id", retrievalId).param("tenantId", tenantId).param("taskId", taskId)
+                .param("caseId", caseId).param("skillCode", skillCode).param("toolCode", toolCode)
+                .param("query", query).param("retrievalMode", retrievalMode)
+                .param("embeddingProvider", embeddingProvider).param("knowledgeAvailable", knowledgeAvailable)
+                .update();
+        for (int index = 0; index < citations.size(); index++) {
+            Map<String, Object> citation = citations.get(index);
+            jdbcClient.sql("""
+                            INSERT INTO agent_knowledge_citation(
+                                id, tenant_id, retrieval_id, document_id, chunk_id, document_title,
+                                document_type, document_version, chunk_index, quote, semantic_score,
+                                keyword_score, hybrid_score, citation_order
+                            ) VALUES (
+                                :id, :tenantId, :retrievalId, :documentId, :chunkId, :documentTitle,
+                                :documentType, :documentVersion, :chunkIndex, :quote, :semanticScore,
+                                :keywordScore, :hybridScore, :citationOrder
+                            )
+                            """)
+                    .param("id", UUID.randomUUID()).param("tenantId", tenantId).param("retrievalId", retrievalId)
+                    .param("documentId", UUID.fromString(String.valueOf(citation.get("documentId"))))
+                    .param("chunkId", UUID.fromString(String.valueOf(citation.get("chunkId"))))
+                    .param("documentTitle", String.valueOf(citation.get("documentTitle")))
+                    .param("documentType", String.valueOf(citation.get("documentType")))
+                    .param("documentVersion", number(citation, "documentVersion").intValue())
+                    .param("chunkIndex", number(citation, "chunkIndex").intValue())
+                    .param("quote", String.valueOf(citation.get("quote")))
+                    .param("semanticScore", number(citation, "semanticScore").doubleValue())
+                    .param("keywordScore", number(citation, "keywordScore").doubleValue())
+                    .param("hybridScore", number(citation, "hybridScore").doubleValue())
+                    .param("citationOrder", index + 1).update();
+        }
+        return findKnowledgeRetrieval(tenantId, taskId, retrievalId).orElseThrow();
+    }
+
     public AgentCheckpoint insertCheckpoint(
             UUID tenantId, UUID taskId, long checkpointVersion, Map<String, ?> state) {
         UUID id = UUID.randomUUID();
@@ -278,6 +335,18 @@ public class AgentTaskRepository {
                 .list();
     }
 
+    public List<AgentKnowledgeRetrieval> findKnowledgeRetrievals(UUID tenantId, UUID taskId) {
+        return jdbcClient.sql("""
+                        SELECT id, task_id, case_id, skill_code, tool_code, query, retrieval_mode,
+                               embedding_provider, knowledge_available, created_at
+                        FROM agent_knowledge_retrieval
+                        WHERE tenant_id = :tenantId AND task_id = :taskId
+                        ORDER BY created_at, id
+                        """)
+                .param("tenantId", tenantId).param("taskId", taskId)
+                .query((rs, row) -> mapKnowledgeRetrieval(tenantId, rs)).list();
+    }
+
     private Optional<AgentStep> findStep(UUID tenantId, UUID taskId, UUID id) {
         return jdbcClient.sql("""
                         SELECT id, task_id, sequence_number, step_type, status, skill_code,
@@ -308,6 +377,46 @@ public class AgentTaskRepository {
                         """)
                 .param("tenantId", tenantId).param("taskId", taskId).param("id", id)
                 .query(this::mapCheckpoint).optional();
+    }
+
+    private Optional<AgentKnowledgeRetrieval> findKnowledgeRetrieval(UUID tenantId, UUID taskId, UUID id) {
+        return jdbcClient.sql("""
+                        SELECT id, task_id, case_id, skill_code, tool_code, query, retrieval_mode,
+                               embedding_provider, knowledge_available, created_at
+                        FROM agent_knowledge_retrieval
+                        WHERE tenant_id = :tenantId AND task_id = :taskId AND id = :id
+                        """)
+                .param("tenantId", tenantId).param("taskId", taskId).param("id", id)
+                .query((rs, row) -> mapKnowledgeRetrieval(tenantId, rs)).optional();
+    }
+
+    private AgentKnowledgeRetrieval mapKnowledgeRetrieval(UUID tenantId, ResultSet rs) throws SQLException {
+        UUID retrievalId = rs.getObject("id", UUID.class);
+        return new AgentKnowledgeRetrieval(
+                retrievalId, rs.getObject("task_id", UUID.class), rs.getObject("case_id", UUID.class),
+                rs.getString("skill_code"), rs.getString("tool_code"), rs.getString("query"),
+                rs.getString("retrieval_mode"), rs.getString("embedding_provider"),
+                rs.getBoolean("knowledge_available"), findCitations(tenantId, retrievalId),
+                rs.getTimestamp("created_at").toInstant());
+    }
+
+    private List<AgentKnowledgeCitation> findCitations(UUID tenantId, UUID retrievalId) {
+        return jdbcClient.sql("""
+                        SELECT id, document_id, chunk_id, document_title, document_type,
+                               document_version, chunk_index, quote, semantic_score,
+                               keyword_score, hybrid_score, citation_order
+                        FROM agent_knowledge_citation
+                        WHERE tenant_id = :tenantId AND retrieval_id = :retrievalId
+                        ORDER BY citation_order
+                        """)
+                .param("tenantId", tenantId).param("retrievalId", retrievalId)
+                .query((rs, row) -> new AgentKnowledgeCitation(
+                        rs.getObject("id", UUID.class), rs.getObject("document_id", UUID.class),
+                        rs.getObject("chunk_id", UUID.class), rs.getString("document_title"),
+                        rs.getString("document_type"), rs.getInt("document_version"),
+                        rs.getInt("chunk_index"), rs.getString("quote"), rs.getDouble("semantic_score"),
+                        rs.getDouble("keyword_score"), rs.getDouble("hybrid_score"),
+                        rs.getInt("citation_order"))).list();
     }
 
     private AgentTask mapTask(ResultSet rs, int rowNum) throws SQLException {
@@ -374,6 +483,12 @@ public class AgentTaskRepository {
         } catch (JacksonException exception) {
             throw new IllegalArgumentException("Agent payload is not serializable", exception);
         }
+    }
+
+    private Number number(Map<String, Object> values, String key) {
+        Object value = values.get(key);
+        if (value instanceof Number number) return number;
+        return Double.valueOf(String.valueOf(value));
     }
 
     private Instant instant(Timestamp timestamp) {

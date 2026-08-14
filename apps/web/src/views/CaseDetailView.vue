@@ -202,12 +202,12 @@ async function startAgent() {
   try {
     const created = await agentApi.create(
       caseId,
-      '运行文件完整性、图片元数据和感知相似度确定性分析',
-      7,
+      '运行文件完整性、图片元数据、感知相似度分析并检索取证知识',
+      9,
       auth.accessToken,
     )
     const completed = await agentApi.run(created.task.id, created.task.version, auth.accessToken)
-    ElMessage.success('确定性媒体分析 Agent 已完成，可查看完整 Trace')
+    ElMessage.success('媒体分析与 RAG 检索 Agent 已完成，可查看完整 Trace')
     await router.push(`/agent-tasks/${completed.task.id}`)
   } catch (error) {
     showError(error)
@@ -328,7 +328,7 @@ onBeforeUnmount(() => {
             {{ nextTransition.label }}
           </el-button>
           <el-button v-if="canRunAgent" type="success" :loading="saving" @click="startAgent">
-            运行基础取证 Agent
+            运行取证与 RAG Agent
           </el-button>
           <small v-if="!nextTransition && !canRunAgent">当前身份或状态没有可执行的状态推进操作。</small>
         </article>
@@ -403,7 +403,7 @@ onBeforeUnmount(() => {
         </div>
         <el-alert
           v-if="canAddEvidence && !workflow.agentEvidenceCandidates.length"
-          title="尚无已完成的 Agent Observation，可先运行确定性媒体分析 Agent"
+          title="尚无已完成的 Agent Observation，可先运行取证与 RAG Agent"
           type="info"
           :closable="false"
           show-icon

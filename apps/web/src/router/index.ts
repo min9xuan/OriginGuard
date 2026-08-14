@@ -34,6 +34,11 @@ const router = createRouter({
           meta: { permissions: ['case:read'] },
         },
         {
+          path: 'knowledge',
+          component: () => import('../views/KnowledgeDocumentsView.vue'),
+          meta: { permissions: ['knowledge:read'] },
+        },
+        {
           path: 'agent-tasks',
           component: () => import('../views/AgentTasksView.vue'),
           meta: { permissions: ['agent:trace:read'] },

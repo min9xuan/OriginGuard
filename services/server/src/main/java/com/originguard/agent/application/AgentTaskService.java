@@ -1,6 +1,7 @@
 package com.originguard.agent.application;
 
 import com.originguard.agent.domain.AgentCheckpoint;
+import com.originguard.agent.domain.AgentKnowledgeRetrieval;
 import com.originguard.agent.domain.AgentObservation;
 import com.originguard.agent.domain.AgentStep;
 import com.originguard.agent.domain.AgentTask;
@@ -125,6 +126,7 @@ public class AgentTaskService {
             List<FakePlanner.SkillSelection> plan = planner.plan(context, running.goal());
             List<String> executedSkills = new ArrayList<>();
             List<String> observationIds = new ArrayList<>();
+            List<String> knowledgeRetrievalIds = new ArrayList<>();
             int remainingBudget = running.remainingStepBudget();
             long checkpointVersion = running.checkpointVersion();
 
@@ -149,25 +151,42 @@ public class AgentTaskService {
                 AgentTool tool = toolRegistry.require(toolCode);
                 Map<String, Object> toolInput = Map.of(
                         "caseId", investigationCase.id().toString(),
+                        "goal", running.goal(),
                         "assetIds", context.assets().stream().map(MediaAsset::id).map(UUID::toString).toList());
                 Map<String, Object> toolOutput = tool.execute(context, toolInput);
                 repository.appendStep(
                         actor.tenantId(), taskId, "TOOL_CALLED", "SUCCEEDED",
                         skill.code(), tool.code(), toolInput, toolOutput);
 
-                AgentObservation observation = repository.insertObservation(
-                        actor.tenantId(), taskId, investigationCase.id(), primaryAsset.id(),
-                        evidenceTypeFor(skill.code()), summaryFor(skill.code(), context.assets().size()), toolOutput);
-                observationIds.add(observation.id().toString());
                 executedSkills.add(skill.code());
-                repository.appendStep(
-                        actor.tenantId(), taskId, "OBSERVATION_RECORDED", "SUCCEEDED",
-                        skill.code(), tool.code(),
-                        Map.of("toolCode", tool.code()),
-                        Map.of(
-                                "observationId", observation.id().toString(),
-                                "evidenceType", observation.evidenceType(),
-                                "summary", observation.summary()));
+                if (SkillRegistry.RAG_SKILL.equals(skill.code())) {
+                    AgentKnowledgeRetrieval retrieval = repository.insertKnowledgeRetrieval(
+                            actor.tenantId(), taskId, investigationCase.id(), skill.code(), tool.code(),
+                            String.valueOf(toolOutput.get("query")),
+                            String.valueOf(toolOutput.get("retrievalMode")),
+                            String.valueOf(toolOutput.get("embeddingProvider")),
+                            Boolean.TRUE.equals(toolOutput.get("knowledgeAvailable")), citations(toolOutput));
+                    knowledgeRetrievalIds.add(retrieval.id().toString());
+                    repository.appendStep(
+                            actor.tenantId(), taskId, "KNOWLEDGE_RETRIEVAL_RECORDED", "SUCCEEDED",
+                            skill.code(), tool.code(), Map.of("toolCode", tool.code()),
+                            Map.of(
+                                    "knowledgeRetrievalId", retrieval.id().toString(),
+                                    "citationCount", retrieval.citations().size(),
+                                    "knowledgeAvailable", retrieval.knowledgeAvailable()));
+                } else {
+                    AgentObservation observation = repository.insertObservation(
+                            actor.tenantId(), taskId, investigationCase.id(), primaryAsset.id(),
+                            evidenceTypeFor(skill.code()), summaryFor(skill.code(), context.assets().size()), toolOutput);
+                    observationIds.add(observation.id().toString());
+                    repository.appendStep(
+                            actor.tenantId(), taskId, "OBSERVATION_RECORDED", "SUCCEEDED",
+                            skill.code(), tool.code(), Map.of("toolCode", tool.code()),
+                            Map.of(
+                                    "observationId", observation.id().toString(),
+                                    "evidenceType", observation.evidenceType(),
+                                    "summary", observation.summary()));
+                }
 
                 checkpointVersion++;
                 repository.insertCheckpoint(
@@ -176,6 +195,7 @@ public class AgentTaskService {
                                 "status", "SKILL_COMPLETED",
                                 "completedSkills", List.copyOf(executedSkills),
                                 "observationIds", List.copyOf(observationIds),
+                                "knowledgeRetrievalIds", List.copyOf(knowledgeRetrievalIds),
                                 "remainingStepBudget", remainingBudget));
                 repository.appendStep(
                         actor.tenantId(), taskId, "CHECKPOINT_SAVED", "SUCCEEDED",
@@ -187,17 +207,20 @@ public class AgentTaskService {
             remainingBudget = consumeBudget(remainingBudget);
             Map<String, Object> conclusion = Map.of(
                     "verdict", "INCONCLUSIVE",
-                    "summary", "三个确定性 Skill 已完成文件完整性、图片元数据和感知相似度检查；这些事实不能单独证明媒体由 AI 生成。",
+                    "summary", "四个确定性 Skill 已完成媒体事实检查与知识检索；这些材料用于辅助人工调查，不能单独证明媒体由 AI 生成。",
                     "executedSkills", List.copyOf(executedSkills),
                     "observationIds", List.copyOf(observationIds),
+                    "knowledgeRetrievalIds", List.copyOf(knowledgeRetrievalIds),
                     "limitations", List.of(
                             "C2PA verifier not configured",
                             "No AIGC classifier or manipulation localization model",
-                            "No RAG evidence"));
+                            "RAG uses deterministic local embeddings and does not perform LLM synthesis"));
             repository.appendStep(
                     actor.tenantId(), taskId, "CONCLUSION_SYNTHESIZED", "SUCCEEDED",
                     FakePlanner.PLAN_CODE, null,
-                    Map.of("observationIds", List.copyOf(observationIds)), conclusion);
+                    Map.of(
+                            "observationIds", List.copyOf(observationIds),
+                            "knowledgeRetrievalIds", List.copyOf(knowledgeRetrievalIds)), conclusion);
             if (!repository.complete(
                     actor.tenantId(), taskId, running.version(), FakePlanner.PLAN_CODE, FakePlanner.PLAN_VERSION,
                     remainingBudget, checkpointVersion, conclusion)) {
@@ -278,11 +301,20 @@ public class AgentTaskService {
         };
     }
 
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> citations(Map<String, Object> toolOutput) {
+        Object value = toolOutput.get("citations");
+        if (!(value instanceof List<?> list)) return List.of();
+        return list.stream().filter(Map.class::isInstance)
+                .map(item -> (Map<String, Object>) item).toList();
+    }
+
     private AgentTaskDetails details(UUID tenantId, UUID taskId) {
         return new AgentTaskDetails(
                 requireTask(tenantId, taskId),
                 repository.findSteps(tenantId, taskId),
                 repository.findObservations(tenantId, taskId),
+                repository.findKnowledgeRetrievals(tenantId, taskId),
                 repository.findCheckpoints(tenantId, taskId));
     }
 
@@ -319,10 +351,12 @@ public class AgentTaskService {
             AgentTask task,
             List<AgentStep> steps,
             List<AgentObservation> observations,
+            List<AgentKnowledgeRetrieval> knowledgeRetrievals,
             List<AgentCheckpoint> checkpoints) {
         public AgentTaskDetails {
             steps = List.copyOf(steps);
             observations = List.copyOf(observations);
+            knowledgeRetrievals = List.copyOf(knowledgeRetrievals);
             checkpoints = List.copyOf(checkpoints);
         }
     }

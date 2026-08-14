@@ -35,5 +35,6 @@ venv/
 
 # Runtime data
 .data/
+.runtime/
 logs/
 artifacts/
