@@ -33,7 +33,8 @@ public class AgentTaskService {
     private final InvestigationCaseRepository caseRepository;
     private final CurrentActorProvider actorProvider;
     private final AgentContextBuilder contextBuilder;
-    private final FakePlanner planner;
+    private final AgentPlanner planner;
+    private final AgentPlanValidator planValidator;
     private final SkillRegistry skillRegistry;
     private final ToolRegistry toolRegistry;
     private final AgentPolicyEngine policyEngine;
@@ -44,7 +45,8 @@ public class AgentTaskService {
             InvestigationCaseRepository caseRepository,
             CurrentActorProvider actorProvider,
             AgentContextBuilder contextBuilder,
-            FakePlanner planner,
+            AgentPlanner planner,
+            AgentPlanValidator planValidator,
             SkillRegistry skillRegistry,
             ToolRegistry toolRegistry,
             AgentPolicyEngine policyEngine,
@@ -54,6 +56,7 @@ public class AgentTaskService {
         this.actorProvider = actorProvider;
         this.contextBuilder = contextBuilder;
         this.planner = planner;
+        this.planValidator = planValidator;
         this.skillRegistry = skillRegistry;
         this.toolRegistry = toolRegistry;
         this.policyEngine = policyEngine;
@@ -123,14 +126,42 @@ public class AgentTaskService {
             MediaAsset primaryAsset = context.assets().stream().findFirst()
                     .orElseThrow(() -> new BusinessConflictException(
                             "AGENT_ASSET_REQUIRED", "Deterministic analysis requires a linked media asset"));
-            List<FakePlanner.SkillSelection> plan = planner.plan(context, running.goal());
+            AgentPlanner.PlannerPlan generatedPlan = planner.plan(context, running.goal());
+            repository.appendStep(
+                    actor.tenantId(), taskId, "PLAN_GENERATED", "SUCCEEDED",
+                    generatedPlan.planCode(), null,
+                    Map.of("goal", running.goal(), "assetCount", context.assets().size()),
+                    Map.of(
+                            "provider", generatedPlan.provider(),
+                            "planCode", generatedPlan.planCode(),
+                            "planVersion", generatedPlan.planVersion(),
+                            "summary", generatedPlan.summary(),
+                            "selectedSkillCodes", generatedPlan.skills().stream()
+                                    .map(AgentPlanner.SkillSelection::skillCode).toList(),
+                            "selectedSkills", generatedPlan.skills().stream()
+                                    .map(selection -> Map.of(
+                                            "skillCode", selection.skillCode(),
+                                            "skillVersion", selection.skillVersion(),
+                                            "reason", selection.reason()))
+                                    .toList(),
+                            "trace", generatedPlan.trace()));
+            AgentPlanner.PlannerPlan plan = planValidator.validate(
+                    generatedPlan, running.remainingStepBudget());
+            repository.appendStep(
+                    actor.tenantId(), taskId, "PLAN_VALIDATED", "SUCCEEDED",
+                    plan.planCode(), null,
+                    Map.of("selectedSkillCount", plan.skills().size()),
+                    Map.of(
+                            "policyRequiredSkills", List.of(
+                                    SkillRegistry.INTEGRITY_SKILL, SkillRegistry.RAG_SKILL),
+                            "requiredStepBudget", plan.skills().size() * 2 + 1));
             List<String> executedSkills = new ArrayList<>();
             List<String> observationIds = new ArrayList<>();
             List<String> knowledgeRetrievalIds = new ArrayList<>();
             int remainingBudget = running.remainingStepBudget();
             long checkpointVersion = running.checkpointVersion();
 
-            for (FakePlanner.SkillSelection selection : plan) {
+            for (AgentPlanner.SkillSelection selection : plan.skills()) {
                 remainingBudget = consumeBudget(remainingBudget);
                 SkillDefinition skill = skillRegistry.require(selection.skillCode(), selection.skillVersion());
                 String toolCode = skill.allowedTools().iterator().next();
@@ -142,10 +173,10 @@ public class AgentTaskService {
                         Map.of(
                                 "skillCode", skill.code(),
                                 "skillVersion", skill.version(),
-                                "planner", "FAKE",
+                                "planner", plan.provider(),
                                 "reason", selection.reason(),
                                 "planPosition", executedSkills.size() + 1,
-                                "planSize", plan.size()));
+                                "planSize", plan.skills().size()));
 
                 remainingBudget = consumeBudget(remainingBudget);
                 AgentTool tool = toolRegistry.require(toolCode);
@@ -207,29 +238,32 @@ public class AgentTaskService {
             remainingBudget = consumeBudget(remainingBudget);
             Map<String, Object> conclusion = Map.of(
                     "verdict", "INCONCLUSIVE",
-                    "summary", "四个确定性 Skill 已完成媒体事实检查与知识检索；这些材料用于辅助人工调查，不能单独证明媒体由 AI 生成。",
+                    "summary", "规划器选择的确定性检查和取证知识检索已完成；当前事实可辅助人工审核，"
+                            + "但不能独立证明媒体由 AI 生成。",
+                    "planner", plan.provider(),
+                    "plannerSummary", plan.summary(),
                     "executedSkills", List.copyOf(executedSkills),
                     "observationIds", List.copyOf(observationIds),
                     "knowledgeRetrievalIds", List.copyOf(knowledgeRetrievalIds),
                     "limitations", List.of(
-                            "C2PA verifier not configured",
-                            "No AIGC classifier or manipulation localization model",
-                            "RAG uses deterministic local embeddings and does not perform LLM synthesis"));
+                            "尚未配置 C2PA 内容凭证校验器",
+                            "尚未接入 AIGC 分类器或篡改定位模型",
+                            plannerLimitation(plan.provider())));
             repository.appendStep(
                     actor.tenantId(), taskId, "CONCLUSION_SYNTHESIZED", "SUCCEEDED",
-                    FakePlanner.PLAN_CODE, null,
+                    plan.planCode(), null,
                     Map.of(
                             "observationIds", List.copyOf(observationIds),
                             "knowledgeRetrievalIds", List.copyOf(knowledgeRetrievalIds)), conclusion);
             if (!repository.complete(
-                    actor.tenantId(), taskId, running.version(), FakePlanner.PLAN_CODE, FakePlanner.PLAN_VERSION,
+                    actor.tenantId(), taskId, running.version(), plan.planCode(), plan.planVersion(),
                     remainingBudget, checkpointVersion, conclusion)) {
                 throw new BusinessConflictException(
                         "AGENT_TASK_VERSION_CONFLICT", "Agent task changed while completing");
             }
             repository.appendStep(
                     actor.tenantId(), taskId, "TASK_COMPLETED", "SUCCEEDED",
-                    FakePlanner.PLAN_CODE, null, Map.of(), Map.of("status", "COMPLETED"));
+                    plan.planCode(), null, Map.of(), Map.of("status", "COMPLETED"));
             auditService.record(
                     actor.tenantId(),
                     actor.userId(),
@@ -281,6 +315,12 @@ public class AgentTaskService {
                     "AGENT_STEP_BUDGET_EXHAUSTED", "Agent step budget was exhausted");
         }
         return remaining - 1;
+    }
+
+    private String plannerLimitation(String provider) {
+        return "FAKE".equals(provider)
+                ? "固定测试规划器只执行预设 Skill 顺序，不理解媒体内容"
+                : "本地多模态模型只负责选择 Skill，不直接作出取证裁决";
     }
 
     private String evidenceTypeFor(String skillCode) {

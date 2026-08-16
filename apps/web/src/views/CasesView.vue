@@ -7,6 +7,7 @@ import { ApiRequestError } from '../api/http'
 import { useAuthStore } from '../stores/auth'
 import type { InvestigationCase } from '../types/business'
 import { formatDate } from '../utils/format'
+import { caseStatusLabel, priorityLabel } from '../utils/presentation'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -51,9 +52,11 @@ onMounted(load)
         <el-table-column prop="caseNumber" label="案件编号" width="190" />
         <el-table-column prop="title" label="标题" min-width="220" />
         <el-table-column label="状态" width="150">
-          <template #default="scope"><el-tag effect="plain">{{ scope.row.status }}</el-tag></template>
+          <template #default="scope"><span class="status-pill" :data-status="scope.row.status">{{ caseStatusLabel(scope.row.status) }}</span></template>
         </el-table-column>
-        <el-table-column prop="priority" label="优先级" width="110" />
+        <el-table-column label="优先级" width="110">
+          <template #default="scope">{{ priorityLabel(scope.row.priority) }}</template>
+        </el-table-column>
         <el-table-column label="更新时间" width="180">
           <template #default="scope">{{ formatDate(scope.row.updatedAt) }}</template>
         </el-table-column>

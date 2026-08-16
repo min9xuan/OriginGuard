@@ -21,6 +21,15 @@ import type {
 } from '../types/business'
 import { nextInvestigatorTransition } from '../utils/case-workflow'
 import { formatBytes, formatDate } from '../utils/format'
+import {
+  auditActionLabel,
+  auditSummary,
+  caseStatusLabel,
+  evidenceConfidenceLabel,
+  evidenceConclusionLabel,
+  evidenceTypeLabel,
+  payloadFields,
+} from '../utils/presentation'
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -33,6 +42,7 @@ const assignees = ref<AssignableUser[]>([])
 const audit = ref<AuditEntry[]>([])
 const loading = ref(false)
 const saving = ref(false)
+const agentRunning = ref(false)
 const selectedAssetId = ref('')
 const edit = reactive({ title: '', description: '', priority: 'NORMAL' as CasePriority })
 const assignment = reactive({ investigatorId: '', reviewerId: '' })
@@ -103,6 +113,32 @@ const nextTransition = computed<{ target: CaseStatus; label: string } | null>(()
     ? nextInvestigatorTransition(status, canOperate.value, auth.hasPermission('case:submit'))
     : null
 })
+const caseStages = [
+  { label: '材料准备', description: '完善案件信息并关联待调查媒体' },
+  { label: '等待调查', description: '确认人员职责并正式开始调查' },
+  { label: '调查取证', description: 'Agent 提供观察，调查员核验并形成证据' },
+  { label: '独立审核', description: '审核员依据正式证据作出决定' },
+  { label: '形成结果', description: '案件确认通过或退回补充调查' },
+]
+const currentStageIndex = computed(() => {
+  const indexByStatus: Record<CaseStatus, number> = {
+    DRAFT: 0,
+    READY: 1,
+    INVESTIGATING: 2,
+    WAITING_REVIEW: 3,
+    CONFIRMED: 4,
+    REJECTED: 4,
+    FAILED: 2,
+    ARCHIVED: 4,
+  }
+  return current.value ? indexByStatus[current.value.status] : 0
+})
+
+function stageState(index: number) {
+  if (index < currentStageIndex.value) return 'completed'
+  if (index === currentStageIndex.value) return 'current'
+  return 'upcoming'
+}
 
 async function load() {
   loading.value = true
@@ -198,7 +234,7 @@ async function transition() {
 
 async function startAgent() {
   if (!current.value) return
-  saving.value = true
+  agentRunning.value = true
   try {
     const created = await agentApi.create(
       caseId,
@@ -212,7 +248,7 @@ async function startAgent() {
   } catch (error) {
     showError(error)
   } finally {
-    saving.value = false
+    agentRunning.value = false
   }
 }
 
@@ -301,7 +337,7 @@ onBeforeUnmount(() => {
           <p>{{ current.description || '暂无调查说明' }}</p>
         </div>
         <div class="status-stack">
-          <el-tag size="large" effect="dark">{{ current.status }}</el-tag>
+          <el-tag size="large" effect="dark">{{ caseStatusLabel(current.status) }}</el-tag>
           <span>version {{ current.version }}</span>
         </div>
       </header>
@@ -314,7 +350,8 @@ onBeforeUnmount(() => {
             <el-form-item label="说明"><el-input v-model="edit.description" type="textarea" :rows="4" :disabled="!canEdit" /></el-form-item>
             <el-form-item label="优先级">
               <el-select v-model="edit.priority" :disabled="!canEdit">
-                <el-option v-for="item in ['LOW', 'NORMAL', 'HIGH', 'CRITICAL']" :key="item" :label="item" :value="item" />
+                <el-option label="低" value="LOW" /><el-option label="普通" value="NORMAL" />
+                <el-option label="高" value="HIGH" /><el-option label="紧急" value="CRITICAL" />
               </el-select>
             </el-form-item>
             <el-button v-if="canEdit" type="primary" :loading="saving" @click="save">保存修改</el-button>
@@ -322,15 +359,29 @@ onBeforeUnmount(() => {
         </article>
 
         <article class="panel workflow-panel">
-          <div><span>当前状态</span><strong>{{ current.status }}</strong></div>
-          <p>DRAFT → READY → INVESTIGATING → WAITING_REVIEW → CONFIRMED / REJECTED</p>
-          <el-button v-if="nextTransition" type="primary" :loading="saving" @click="transition">
-            {{ nextTransition.label }}
-          </el-button>
-          <el-button v-if="canRunAgent" type="success" :loading="saving" @click="startAgent">
-            运行取证与 RAG Agent
-          </el-button>
-          <small v-if="!nextTransition && !canRunAgent">当前身份或状态没有可执行的状态推进操作。</small>
+          <div class="workflow-heading">
+            <div><span>案件处理流程</span><strong>{{ caseStatusLabel(current.status) }}</strong></div>
+            <small>Agent 只辅助取证，不会自动推进案件或代替人工审核。</small>
+          </div>
+          <ol class="case-stage-list">
+            <li v-for="(stage, index) in caseStages" :key="stage.label" :class="stageState(index)">
+              <span class="stage-marker">{{ index + 1 }}</span>
+              <div><strong>{{ stage.label }}</strong><small>{{ stage.description }}</small></div>
+            </li>
+          </ol>
+          <div v-if="nextTransition" class="workflow-action primary-action">
+            <div><strong>案件流转</strong><small>完成当前阶段后，将案件推进到下一处理环节。</small></div>
+            <el-button type="primary" :loading="saving" :disabled="agentRunning" @click="transition">
+              {{ nextTransition.label }}
+            </el-button>
+          </div>
+          <div v-if="canRunAgent" class="workflow-action agent-action">
+            <div><strong>Agent 辅助取证</strong><small>生成候选观察，仍需调查员确认后才能成为正式证据。</small></div>
+            <el-button type="success" :loading="agentRunning" :disabled="saving" @click="startAgent">
+              {{ agentRunning ? 'Agent 正在取证' : '运行取证 Agent' }}
+            </el-button>
+          </div>
+          <small v-if="!nextTransition && !canRunAgent" class="workflow-empty">当前身份或案件状态没有可执行操作。</small>
         </article>
       </section>
 
@@ -385,13 +436,17 @@ onBeforeUnmount(() => {
         <div v-if="canAddEvidence && workflow.agentEvidenceCandidates.length" class="evidence-list">
           <article v-for="candidate in workflow.agentEvidenceCandidates" :key="candidate.observationId" class="evidence-card">
             <div>
-              <strong>{{ candidate.evidenceType }}</strong>
-              <el-tag size="small" type="warning">AGENT OBSERVATION</el-tag>
+              <strong>{{ evidenceTypeLabel(candidate.evidenceType) }}</strong>
+              <el-tag size="small" type="warning">Agent 候选观察</el-tag>
               <el-tag v-if="candidate.promotedEvidenceId" size="small" type="success">已纳入正式证据</el-tag>
             </div>
             <p>{{ candidate.summary }}</p>
             <small>{{ assetName(candidate.assetId) }} · {{ formatDate(candidate.createdAt) }}</small>
-            <details><summary>查看结构化 Payload</summary><pre>{{ JSON.stringify(candidate.payload, null, 2) }}</pre></details>
+            <dl v-if="payloadFields(candidate.payload).length" class="fact-grid compact-facts">
+              <template v-for="field in payloadFields(candidate.payload)" :key="field.label">
+                <dt>{{ field.label }}</dt><dd>{{ field.value }}</dd>
+              </template>
+            </dl>
             <el-button
               v-if="!candidate.promotedEvidenceId"
               type="success"
@@ -436,9 +491,9 @@ onBeforeUnmount(() => {
           <article v-for="item in workflow.evidence" :key="item.id" class="evidence-card">
             <div>
               <strong>{{ item.title }}</strong>
-              <el-tag size="small" :type="item.evidenceType === 'AGENT_OBSERVATION' ? 'warning' : 'primary'">{{ item.evidenceType }}</el-tag>
-              <el-tag size="small">{{ item.conclusion }}</el-tag>
-              <el-tag size="small" type="info">{{ item.confidence }}</el-tag>
+              <el-tag size="small" :type="item.evidenceType === 'AGENT_OBSERVATION' ? 'warning' : 'primary'">{{ item.evidenceType === 'AGENT_OBSERVATION' ? 'Agent 观察' : '人工观察' }}</el-tag>
+              <el-tag size="small">{{ evidenceConclusionLabel(item.conclusion) }}</el-tag>
+              <el-tag size="small" type="info">{{ evidenceConfidenceLabel(item.confidence) }}</el-tag>
             </div>
             <p>{{ item.observation }}</p>
             <small>{{ assetName(item.assetId) }} · {{ formatDate(item.createdAt) }}</small>
@@ -487,8 +542,8 @@ onBeforeUnmount(() => {
         <ol class="audit-list">
           <li v-for="entry in audit" :key="entry.id">
             <span>{{ formatDate(entry.createdAt) }}</span>
-            <strong>{{ entry.action }}</strong>
-            <code>{{ JSON.stringify(entry.details) }}</code>
+            <strong>{{ auditActionLabel(entry.action) }}</strong>
+            <span class="audit-summary">{{ auditSummary(entry.action, entry.details) }}</span>
           </li>
         </ol>
       </section>

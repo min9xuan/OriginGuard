@@ -1,6 +1,24 @@
 # OriginGuard
 
-> 当前状态：M4.3 已接入本地真实 Embedding。`BAAI/bge-small-zh-v1.5` 由 Python Model API 生成 512 维向量，Java 后端通过版本化 Provider 向量表完成 pgvector 混合检索；模型与缓存位于项目 `.runtime`，不会提交到 Git。
+> 当前状态：M5.1 已加入可切换的本地多模态 Planner。`Qwen3-VL-4B-Instruct` Q4_K_M 可结合案件文字、租户 RAG 指引和首张案件图片选择受控 Skill；默认仍使用 Fake Planner，便于无模型回归。模型与缓存均位于项目 `.runtime`，不会提交到 Git。
+
+本地 Qwen3-VL Planner 启动：
+
+```powershell
+.\scripts\start-local-stack.ps1
+```
+
+该脚本会启动 PostgreSQL、MinIO、BGE、Qwen3-VL、Spring Boot 和 Vue，并把进程信息与日志写入 `.runtime`。结束开发时运行：
+
+```powershell
+.\scripts\stop-local-stack.ps1
+```
+
+Qwen 服务启动后可运行 `.\scripts\check-qwen-vl.ps1` 做独立健康检查。8GB 显存默认使用 4096 上下文、单并发、896 像素输入边长；如显存不足，可用 `.\scripts\start-qwen-vl.ps1 -ContextSize 3072 -GpuLayers 36` 降低占用。
+
+详见 [M5.1 本地 Qwen3-VL Planner](docs/product/m5.1-local-qwen-planner.md)。
+
+> M4.3 已接入本地真实 Embedding。`BAAI/bge-small-zh-v1.5` 由 Python Model API 生成 512 维向量，Java 后端通过版本化 Provider 向量表完成 pgvector 混合检索。
 
 真实 Embedding 本地启动：
 
@@ -38,7 +56,8 @@ OriginGuard 是一个面向内容审核与数字取证场景的 AIGC 内容真�
 - 调查员针对案件媒体追加人工观察证据
 - 审核任务自动创建，审核员通过或驳回后进入 `CONFIRMED` / `REJECTED`
 - 案件乐观锁、租户范围查询和追加式审计时间线
-- `AgentTask → Context Builder → Fake Planner → Skill → Real Media Tool → Observation → Checkpoint → Trace` 完整链路
+- `AgentTask → Context Builder → Fake/Local Qwen Planner → Plan Validator → Skill → Real Media Tool → Observation → Checkpoint → Trace` 完整链路
+- 本地 Qwen3-VL 读取压缩后的案件首图与租户 RAG 上下文，输出 JSON Schema 约束的 Skill 计划
 - 版本化 Skill、Tool 白名单、权限/案件状态策略和 Step Budget
 - Agent 任务列表、结构化结论、Observation、Checkpoint 与逐步 Trace 页面
 - Markdown/纯文本知识草稿、发布、确定性切片、64 维本地向量与 HNSW/GIN 索引

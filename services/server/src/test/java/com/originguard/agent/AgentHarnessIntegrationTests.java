@@ -97,7 +97,12 @@ class AgentHarnessIntegrationTests {
                 .andExpect(jsonPath("$.task.remainingStepBudget").value(0))
                 .andExpect(jsonPath("$.task.checkpointVersion").value(4))
                 .andExpect(jsonPath("$.task.conclusion.verdict").value("INCONCLUSIVE"))
-                .andExpect(jsonPath("$.steps.length()").value(19))
+                .andExpect(jsonPath("$.steps.length()").value(21))
+                .andExpect(jsonPath("$.steps[*].stepType", hasItem("PLAN_GENERATED")))
+                .andExpect(jsonPath("$.steps[*].stepType", hasItem("PLAN_VALIDATED")))
+                .andExpect(jsonPath("$.steps[1].output.provider").value("FAKE"))
+                .andExpect(jsonPath("$.steps[1].output.selectedSkills.length()").value(4))
+                .andExpect(jsonPath("$.steps[1].output.selectedSkills[0].reason").isNotEmpty())
                 .andExpect(jsonPath("$.steps[*].stepType", hasItem("TOOL_CALLED")))
                 .andExpect(jsonPath("$.steps[*].stepType", hasItem("CHECKPOINT_SAVED")))
                 .andExpect(jsonPath("$.observations.length()").value(3))
@@ -157,7 +162,7 @@ class AgentHarnessIntegrationTests {
                         .header("Authorization", bearer(reviewer)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.task.status").value("COMPLETED"))
-                .andExpect(jsonPath("$.steps.length()").value(19));
+                .andExpect(jsonPath("$.steps.length()").value(21));
 
         mockMvc.perform(get("/api/v1/cases/{id}/audit", caseId)
                         .header("Authorization", bearer(reviewer)))
