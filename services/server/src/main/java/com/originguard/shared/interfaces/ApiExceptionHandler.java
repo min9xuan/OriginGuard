@@ -2,6 +2,7 @@ package com.originguard.shared.interfaces;
 
 import com.originguard.identity.application.InvalidCredentialsException;
 import com.originguard.identity.application.InvalidRefreshTokenException;
+import com.originguard.knowledge.application.ExternalKnowledgeSourceUnavailableException;
 import com.originguard.shared.application.BusinessConflictException;
 import com.originguard.shared.application.ResourceNotFoundException;
 import java.time.Instant;
@@ -50,6 +51,12 @@ public class ApiExceptionHandler {
     @ExceptionHandler(BusinessConflictException.class)
     ResponseEntity<ApiError> conflict(BusinessConflictException exception) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(new ApiError(exception.code(), exception.getMessage(), Instant.now()));
+    }
+
+    @ExceptionHandler(ExternalKnowledgeSourceUnavailableException.class)
+    ResponseEntity<ApiError> externalKnowledgeUnavailable(ExternalKnowledgeSourceUnavailableException exception) {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                 .body(new ApiError(exception.code(), exception.getMessage(), Instant.now()));
     }
 

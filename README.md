@@ -1,6 +1,18 @@
 # OriginGuard
 
-> 当前状态：M5.1 已加入可切换的本地多模态 Planner。`Qwen3-VL-4B-Instruct` Q4_K_M 可结合案件文字、租户 RAG 指引和首张案件图片选择受控 Skill；默认仍使用 Fake Planner，便于无模型回归。模型与缓存均位于项目 `.runtime`，不会提交到 Git。
+> 当前状态：M5.2 已把 ICLR 2025 AIDE 官方预训练模型接入 Agent Harness。`Qwen3-VL-4B-Instruct` 负责规划受控 Skill，AIDE 负责输出图片 AIGC 检测分数；模型结果保存为可追溯 Observation，仍由调查员和审核员作出最终决定。模型与缓存均位于项目 `.runtime`，不会提交到 Git。
+
+首次使用 AIDE（下载约 3.59 GB 官方权重）运行：
+
+```powershell
+.\scripts\setup-aide.ps1
+```
+
+首次使用 CLIP 媒体类型识别（下载约 338 MB 官方 ViT-B/32 权重）运行：
+
+```powershell
+.\scripts\setup-clip.ps1
+```
 
 本地 Qwen3-VL Planner 启动：
 
@@ -8,7 +20,7 @@
 .\scripts\start-local-stack.ps1
 ```
 
-该脚本会启动 PostgreSQL、MinIO、BGE、Qwen3-VL、Spring Boot 和 Vue，并把进程信息与日志写入 `.runtime`。结束开发时运行：
+该脚本会启动 PostgreSQL、MinIO、BGE/AIDE Model API、Qwen3-VL、Spring Boot 和 Vue，并把进程信息与日志写入 `.runtime`。为避免 8GB 显存与 Qwen 同时驻留时溢出，统一脚本默认让 AIDE 按需在 CPU 加载；可在单独测试时设置 `$env:AIDE_DEVICE='cuda'`。结束开发时运行：
 
 ```powershell
 .\scripts\stop-local-stack.ps1
@@ -16,7 +28,7 @@
 
 Qwen 服务启动后可运行 `.\scripts\check-qwen-vl.ps1` 做独立健康检查。8GB 显存默认使用 4096 上下文、单并发、896 像素输入边长；如显存不足，可用 `.\scripts\start-qwen-vl.ps1 -ContextSize 3072 -GpuLayers 36` 降低占用。
 
-详见 [M5.1 本地 Qwen3-VL Planner](docs/product/m5.1-local-qwen-planner.md)。
+详见 [M5.1 本地 Qwen3-VL Planner](docs/product/m5.1-local-qwen-planner.md)和 [M5.2 AIDE 检测 Skill](docs/product/m5.2-aide-detector.md)。
 
 > M4.3 已接入本地真实 Embedding。`BAAI/bge-small-zh-v1.5` 由 Python Model API 生成 512 维向量，Java 后端通过版本化 Provider 向量表完成 pgvector 混合检索。
 
@@ -58,6 +70,11 @@ OriginGuard 是一个面向内容审核与数字取证场景的 AIGC 内容真�
 - 案件乐观锁、租户范围查询和追加式审计时间线
 - `AgentTask → Context Builder → Fake/Local Qwen Planner → Plan Validator → Skill → Real Media Tool → Observation → Checkpoint → Trace` 完整链路
 - 本地 Qwen3-VL 读取压缩后的案件首图与租户 RAG 上下文，输出 JSON Schema 约束的 Skill 计划
+- ICLR 2025 AIDE 官方 GenImage 检查点、频域/语义混合推理 API 与 `detect_aigc_with_aide` Skill
+- AIDE 模型版本、权重 SHA-256、运行设备、阈值、耗时和每图概率的 Observation 留痕
+- OpenAI CLIP ViT-B/32 在 LLM 规划前区分摄影、插画卡通、3D 渲染、界面截图和平面设计；类型上下文只参与 Skill 路由、AIDE 适用性判断和结果解释，不参与 AIGC 真假投票
+- RAG 知识扩展按需检索 OpenAlex 论文元数据与摘要，不下载 PDF；候选内容先生成外部知识草稿，人工审核发布后才建立 Embedding
+- RAG 检索按来源优先级重排：租户知识优先级 100，外部学术知识优先级 40，相关性仍占主要权重
 - 版本化 Skill、Tool 白名单、权限/案件状态策略和 Step Budget
 - Agent 任务列表、结构化结论、Observation、Checkpoint 与逐步 Trace 页面
 - Markdown/纯文本知识草稿、发布、确定性切片、64 维本地向量与 HNSW/GIN 索引
@@ -153,10 +170,10 @@ reviewer → 查看证据与审核任务 → 通过或填写理由驳回
 
 调查员先上传新的 JPEG/PNG 媒体并关联案件，将已分派给自己的案件推进到 `INVESTIGATING`，然后点击“运行 Agent”。任务会同步执行确定性流程并跳转到 Trace 页面。具有 `agent:trace:read` 权限的用户也可从“Agent 任务”导航查看租户内任务。
 
-Fake Planner 仍不调用 LLM，但会固定编排 `verify_media_integrity`、`extract_image_metadata`、`compare_perceptual_similarity` 三个版本化 Skill。对应 Tool 都会读取 MinIO 中的真实字节；由于这些确定性事实不是 AIGC 分类证据，真实性结论仍为 `INCONCLUSIVE`。实现说明见 [M3.2 多确定性 Skill](docs/product/m3.2-deterministic-media-skills.md)。
+Fake Planner 仍不调用 LLM，但会固定编排文件完整性、图片元数据、感知相似度、AIDE 生成检测和 RAG 五个版本化 Skill。对应 Tool 都会读取 MinIO 中的真实字节；AIDE 的概率会进入阶段性结论，但不会自动成为人工审核决定。实现说明见 [M3.2 多确定性 Skill](docs/product/m3.2-deterministic-media-skills.md)与 [M5.2 AIDE 检测 Skill](docs/product/m5.2-aide-detector.md)。
 
-M4.1 起，Fake Planner 还会执行第四个 `retrieve_forensic_guidance` Skill，从当前租户已发布知识中进行 PostgreSQL 全文检索与 pgvector 混合召回。结果独立保存为 Knowledge Retrieval/Citation，供 Agent/LLM 解释媒体 Observation 和制定调查方案，不能直接纳入案件证据。第一版使用本地确定性向量，不调用 LLM、不下载模型；它用于验证知识发布、过滤、引用、Trace 与 Harness 链路，不能等同于生产级语义检索。实现说明见 [M4.1 RAG 第一版](docs/product/m4.1-rag-foundation.md)。
+`retrieve_forensic_guidance` 从当前租户已发布知识中进行 PostgreSQL 全文检索与 pgvector 混合召回。结果独立保存为 Knowledge Retrieval/Citation，供 Agent/LLM 解释媒体 Observation 和制定调查方案，不能直接纳入案件证据。实现说明见 [M4.1 RAG 第一版](docs/product/m4.1-rag-foundation.md)。
 
 ## M3.3 Observation、正式证据与审核引用
 
-Agent 运行后，三个 Observation 会作为候选调查材料出现在案件页。分派的调查员可逐条确认纳入正式案件证据；系统保存原 Observation ID，禁止重复纳入，并固定标记为 `INCONCLUSIVE / LOW`。案件进入审核后，审核员必须勾选至少一条正式证据才能提交决定，引用关系随审核任务永久保存。实现说明见 [M3.3 Agent 证据审核闭环](docs/product/m3.3-agent-evidence-review-loop.md)。
+Agent 运行后，文件完整性、图片元数据、感知相似度和 AIDE 检测 Observation 会作为候选调查材料出现在案件页。分派的调查员可逐条确认纳入正式案件证据；系统保存原 Observation ID，禁止重复纳入。案件进入审核后，审核员必须勾选至少一条正式证据才能提交决定，引用关系随审核任务永久保存。实现说明见 [M3.3 Agent 证据审核闭环](docs/product/m3.3-agent-evidence-review-loop.md)。

@@ -12,7 +12,7 @@ import org.springframework.stereotype.Component;
         matchIfMissing = true)
 public class FakePlanner implements AgentPlanner {
     public static final String PLAN_CODE = "deterministic_media_rag_pipeline";
-    public static final String PLAN_VERSION = "1.1.0";
+    public static final String PLAN_VERSION = "1.3.0";
 
     public PlannerPlan plan(AgentExecutionContext context, String goal) {
         List<SkillSelection> skills = List.of(
@@ -29,6 +29,10 @@ public class FakePlanner implements AgentPlanner {
                         SkillRegistry.SKILL_VERSION,
                         "Compare perceptual hashes across all media linked to the case"),
                 new SkillSelection(
+                        SkillRegistry.AIGC_DETECTION_SKILL,
+                        SkillRegistry.SKILL_VERSION,
+                        "Run AIDE after CLIP media typing and interpret the score within that media domain"),
+                new SkillSelection(
                         SkillRegistry.RAG_SKILL,
                         SkillRegistry.SKILL_VERSION,
                         "Retrieve published tenant knowledge with traceable document and chunk citations"));
@@ -36,7 +40,7 @@ public class FakePlanner implements AgentPlanner {
                 PLAN_CODE,
                 PLAN_VERSION,
                 "FAKE",
-                "Fixed deterministic plan used for repeatable local development and regression tests",
+                "CLIP media typing is ready; run the fixed deterministic evidence pipeline with type-aware AIDE interpretation",
                 skills,
                 Map.of("mode", "DETERMINISTIC", "assetCount", context.assets().size()));
     }

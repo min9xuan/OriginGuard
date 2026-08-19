@@ -1,5 +1,6 @@
 import type {
   KnowledgeDocument, KnowledgeDocumentType, KnowledgePublishResult, KnowledgeReindexResult, RagDebugSearchResult,
+  RagExternalKnowledgeCandidate, RagKnowledgeDiscoveryResult, RagKnowledgeVenue,
   RagEvaluationCase, RagEvaluationRun,
 } from '../types/knowledge'
 import { apiRequest } from './http'
@@ -19,6 +20,21 @@ export const knowledgeApi = {
   reindex(accessToken: string) {
     return apiRequest<KnowledgeReindexResult>('/knowledge-documents/reindex', {
       method: 'POST',
+    }, accessToken)
+  },
+  listExpansionVenues(accessToken: string) {
+    return apiRequest<RagKnowledgeVenue[]>('/rag/knowledge-expansion/venues', {}, accessToken)
+  },
+  discoverKnowledge(
+    query: string, venueCodes: string[], fromYear: number, toYear: number, limit: number, accessToken: string,
+  ) {
+    return apiRequest<RagKnowledgeDiscoveryResult>('/rag/knowledge-expansion/search', {
+      method: 'POST', body: JSON.stringify({ query, venueCodes, fromYear, toYear, limit }),
+    }, accessToken)
+  },
+  createExternalDraft(candidate: RagExternalKnowledgeCandidate, accessToken: string) {
+    return apiRequest<KnowledgeDocument>('/rag/knowledge-expansion/drafts', {
+      method: 'POST', body: JSON.stringify(candidate),
     }, accessToken)
   },
   debugSearch(query: string, topK: number, accessToken: string) {

@@ -47,7 +47,25 @@ originguard:
     provider: ${EMBEDDING_PROVIDER:bge-small-zh-v1.5}
     model-api-base-url: ${MODEL_API_BASE_URL:http://localhost:8090}
     timeout: ${EMBEDDING_TIMEOUT:PT30S}
+  knowledge-expansion:
+    openalex-base-url: ${OPENALEX_BASE_URL:https://api.openalex.org}
+    openalex-api-key: ${OPENALEX_API_KEY:}
+    timeout: ${RAG_KNOWLEDGE_EXPANSION_TIMEOUT:PT20S}
   agent:
+    aigc-detector:
+      provider: ${AIGC_DETECTOR_PROVIDER:model-api}
+      base-url: ${MODEL_API_BASE_URL:http://127.0.0.1:8090}
+      timeout: ${AIGC_DETECTOR_TIMEOUT:PT10M}
+    media-type-classifier:
+      provider: ${MEDIA_TYPE_CLASSIFIER_PROVIDER:model-api}
+      base-url: ${MODEL_API_BASE_URL:http://127.0.0.1:8090}
+      timeout: ${CLIP_CLASSIFIER_TIMEOUT:PT2M}
+    aigc-explainer:
+      provider: ${AIGC_EXPLAINER_PROVIDER:template}
+      base-url: ${QWEN_VL_BASE_URL:http://127.0.0.1:8092}
+      model: ${QWEN_VL_MODEL:qwen3-vl-4b-instruct-q4-k-m}
+      timeout: ${QWEN_VL_TIMEOUT:PT5M}
+      max-image-edge: ${QWEN_VL_MAX_IMAGE_EDGE:896}
     planner:
       provider: ${AGENT_PLANNER_PROVIDER:fake}
       base-url: ${QWEN_VL_BASE_URL:http://127.0.0.1:8092}

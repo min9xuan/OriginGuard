@@ -21,7 +21,9 @@ import type {
 } from '../types/business'
 import { nextInvestigatorTransition } from '../utils/case-workflow'
 import { formatBytes, formatDate } from '../utils/format'
+import type { AgentTask } from '../types/agent'
 import {
+  agentStatusLabel,
   auditActionLabel,
   auditSummary,
   caseStatusLabel,
@@ -37,6 +39,7 @@ const router = useRouter()
 const caseId = route.params.caseId as string
 const details = ref<CaseDetails | null>(null)
 const workflow = ref<CaseWorkflow>({ evidence: [], reviewTasks: [], agentEvidenceCandidates: [] })
+const caseAgentTasks = ref<AgentTask[]>([])
 const allAssets = ref<MediaAsset[]>([])
 const assignees = ref<AssignableUser[]>([])
 const audit = ref<AuditEntry[]>([])
@@ -133,6 +136,9 @@ const currentStageIndex = computed(() => {
   }
   return current.value ? indexByStatus[current.value.status] : 0
 })
+const recentAgentTasks = computed(() => [...caseAgentTasks.value]
+  .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
+  .slice(0, 5))
 
 function stageState(index: number) {
   if (index < currentStageIndex.value) return 'completed'
@@ -143,18 +149,24 @@ function stageState(index: number) {
 async function load() {
   loading.value = true
   try {
+    const agentTasksRequest = auth.hasPermission('agent:trace:read')
+      ? agentApi.list(auth.accessToken)
+      : Promise.resolve([] as AgentTask[])
     const requests = [
       caseApi.get(caseId, auth.accessToken),
       mediaApi.list(auth.accessToken),
       caseApi.audit(caseId, auth.accessToken),
       caseApi.workflow(caseId, auth.accessToken),
+      caseApi.assignees(auth.accessToken),
+      agentTasksRequest,
     ] as const
-    const [caseResult, assetsResult, auditResult, workflowResult] = await Promise.all(requests)
+    const [caseResult, assetsResult, auditResult, workflowResult, assigneeResult, agentTaskResult] = await Promise.all(requests)
     setDetails(caseResult)
     allAssets.value = assetsResult
     audit.value = auditResult
     workflow.value = workflowResult
-    assignees.value = await caseApi.assignees(auth.accessToken)
+    assignees.value = assigneeResult
+    caseAgentTasks.value = agentTaskResult.filter((task) => task.caseId === caseId)
   } catch (error) {
     showError(error)
   } finally {
@@ -238,8 +250,8 @@ async function startAgent() {
   try {
     const created = await agentApi.create(
       caseId,
-      '运行文件完整性、图片元数据、感知相似度分析并检索取证知识',
-      9,
+      '先使用 CLIP 识别媒体类型，再由 LLM 规划文件完整性、图片元数据、AIDE 生成检测、感知相似度分析和取证知识检索',
+      13,
       auth.accessToken,
     )
     const completed = await agentApi.run(created.task.id, created.task.version, auth.accessToken)
@@ -313,6 +325,18 @@ function assetName(id: string) {
   return details.value?.assets.find((asset) => asset.id === id)?.originalFilename ?? id
 }
 
+function openAgentTask(taskId: string) {
+  void router.push(`/agent-tasks/${taskId}`)
+}
+
+function agentTaskHint(task: AgentTask) {
+  if (task.status === 'COMPLETED') return '候选观察已经生成，等待调查员核验'
+  if (task.status === 'FAILED') return '任务运行失败，可进入详情查看失败环节'
+  if (task.status === 'RUNNING') return 'Agent 正在执行受控取证步骤'
+  if (task.status === 'CANCELLED') return '任务已经取消'
+  return '任务尚未开始运行'
+}
+
 function evidenceTitle(id: string) {
   return workflow.value.evidence.find((item) => item.id === id)?.title ?? id
 }
@@ -383,6 +407,30 @@ onBeforeUnmount(() => {
           </div>
           <small v-if="!nextTransition && !canRunAgent" class="workflow-empty">当前身份或案件状态没有可执行操作。</small>
         </article>
+      </section>
+
+      <section v-if="auth.hasPermission('agent:trace:read')" class="panel case-agent-history">
+        <div class="section-heading">
+          <div>
+            <h2>本案 Agent 取证记录</h2>
+            <p>{{ caseAgentTasks.length }} 次分析均只属于当前案件；进入任务可查看方案、观察和知识依据</p>
+          </div>
+          <el-button plain @click="router.push('/agent-tasks')">查看全部 Agent 任务</el-button>
+        </div>
+        <div v-if="recentAgentTasks.length" class="case-agent-task-list">
+          <article v-for="task in recentAgentTasks" :key="task.id" class="case-agent-task-card" @click="openAgentTask(task.id)">
+            <div>
+              <span class="status-pill" :data-status="task.status">{{ agentStatusLabel(task.status) }}</span>
+              <strong>{{ task.goal }}</strong>
+              <p>{{ agentTaskHint(task) }}</p>
+              <small>运行时间：{{ formatDate(task.createdAt) }} · 任务编号 {{ task.id }}</small>
+            </div>
+            <el-button type="primary" plain @click.stop="openAgentTask(task.id)">
+              {{ task.status === 'COMPLETED' ? '查看取证结果' : '查看任务详情' }}
+            </el-button>
+          </article>
+        </div>
+        <el-empty v-else description="本案尚未运行 Agent；可在案件处理流程中启动一次辅助取证" />
       </section>
 
       <section class="panel assignment-panel">

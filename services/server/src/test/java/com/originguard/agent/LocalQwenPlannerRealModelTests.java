@@ -64,10 +64,13 @@ class LocalQwenPlannerRealModelTests {
         AgentPlanner.PlannerPlan plan = planner.plan(context(tenantId, asset),
                 "Choose safe evidence collection skills for this image");
 
-        new AgentPlanValidator(skills).validate(plan, 9);
+        new AgentPlanValidator(skills).validate(plan, 11);
         assertThat(plan.provider()).isEqualTo(LocalQwenPlanner.PROVIDER);
         assertThat(plan.skills()).extracting(AgentPlanner.SkillSelection::skillCode)
-                .contains(SkillRegistry.INTEGRITY_SKILL, SkillRegistry.RAG_SKILL);
+                .contains(
+                        SkillRegistry.INTEGRITY_SKILL,
+                        SkillRegistry.AIGC_DETECTION_SKILL,
+                        SkillRegistry.RAG_SKILL);
         assertThat(plan.trace()).containsEntry("mode", "LOCAL_MULTIMODAL_LLM");
     }
 

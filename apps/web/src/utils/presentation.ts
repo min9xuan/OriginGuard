@@ -28,9 +28,11 @@ const agentStatusLabels: Record<AgentTaskStatus, string> = {
 }
 
 const skillLabels: Record<string, { name: string; description: string }> = {
+  classify_media_type_with_clip: { name: 'CLIP 媒体类型识别', description: '在规划前识别图片内容类型，为 LLM 路由和结果解释提供上下文' },
   verify_media_integrity: { name: '文件完整性检查', description: '核验文件哈希、大小和存储内容是否一致' },
   extract_image_metadata: { name: '图片元数据提取', description: '读取图片格式、尺寸和可用的元数据信息' },
   compare_perceptual_similarity: { name: '感知相似度分析', description: '在存在多个可比媒体时检查视觉相似程度' },
+  detect_aigc_with_aide: { name: 'AIDE 生成检测', description: '运行频域与语义混合特征模型，输出可追溯的 AIGC 检测分数' },
   retrieve_forensic_guidance: { name: '取证知识检索', description: '从知识库检索与当前案件相关的调查指引' },
 }
 
@@ -55,6 +57,8 @@ const evidenceLabels: Record<string, string> = {
   FILE_INTEGRITY: '文件完整性',
   IMAGE_METADATA: '图片元数据',
   PERCEPTUAL_SIMILARITY: '感知相似度',
+  MEDIA_TYPE_CLASSIFICATION: 'CLIP 媒体类型',
+  AIGC_DETECTION: 'AIGC 模型检测',
 }
 
 const conclusionLabels: Record<EvidenceConclusion, string> = {
@@ -87,6 +91,24 @@ const fieldLabels: Record<string, string> = {
   allChecksPassed: '全部检查通过',
   toolVersion: '工具版本',
   provider: '执行来源',
+  model: '检测模型',
+  modelVersion: '模型版本',
+  checkpointSha256: '权重指纹',
+  device: '运行设备',
+  precision: '计算精度',
+  analyzedImageCount: '已检测图片数',
+  overallClassification: '模型阶段判断',
+  maximumSyntheticProbability: '最高 AI 生成概率',
+  syntheticProbability: 'AI 生成概率',
+  authenticProbability: '真实图片概率',
+  syntheticThreshold: 'AI 生成判定阈值',
+  authenticThreshold: '真实图片判定阈值',
+  processingMilliseconds: '检测耗时（毫秒）',
+  mediaType: '媒体类型代码',
+  mediaTypeLabel: '媒体类型',
+  mediaTypeScore: '类型相对匹配度',
+  mediaTypeMargin: '类型领先幅度',
+  promptVersion: '类型提示词版本',
   nearDuplicateThreshold: '近重复阈值',
   comparisonCount: '实际比较次数',
   algorithm: '分析算法',
@@ -137,6 +159,8 @@ export function verdictLabel(value: string) {
     INCONCLUSIVE: '证据不足，暂无法判断',
     LIKELY_AUTHENTIC: '倾向真实',
     LIKELY_SYNTHETIC: '倾向 AI 生成',
+    CONFLICTING_EVIDENCE: '证据冲突，不能下结论',
+    UNSUPPORTED_INPUT: '输入不适用',
   }
   return labels[value] ?? value
 }
@@ -164,7 +188,18 @@ export function payloadFields(payload: Record<string, unknown>, limit = 8): Disp
   return Object.entries(payload)
     .filter(([, value]) => value !== null && value !== undefined && typeof value !== 'object')
     .slice(0, limit)
-    .map(([key, value]) => ({ label: fieldLabels[key] ?? key, value: displayValue(value) }))
+    .map(([key, value]) => ({ label: fieldLabels[key] ?? key, value: displayFieldValue(key, value) }))
+}
+
+function displayFieldValue(key: string, value: unknown) {
+  if (['classification', 'overallClassification', 'verdict'].includes(key) && typeof value === 'string') {
+    return verdictLabel(value)
+  }
+  if (['syntheticProbability', 'authenticProbability', 'maximumSyntheticProbability', 'syntheticThreshold', 'authenticThreshold', 'mediaTypeScore', 'mediaTypeMargin'].includes(key)
+    && typeof value === 'number') {
+    return `${(value * 100).toFixed(1)}%`
+  }
+  return displayValue(value)
 }
 
 export function displayValue(value: unknown) {

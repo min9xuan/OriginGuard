@@ -9,7 +9,10 @@ import org.springframework.stereotype.Component;
 @Component
 public class AgentPlanValidator {
     private static final Set<String> REQUIRED_SKILLS =
-            Set.of(SkillRegistry.INTEGRITY_SKILL, SkillRegistry.RAG_SKILL);
+            Set.of(
+                    SkillRegistry.INTEGRITY_SKILL,
+                    SkillRegistry.AIGC_DETECTION_SKILL,
+                    SkillRegistry.RAG_SKILL);
     private final SkillRegistry skillRegistry;
 
     public AgentPlanValidator(SkillRegistry skillRegistry) {
@@ -17,8 +20,9 @@ public class AgentPlanValidator {
     }
 
     public AgentPlanner.PlannerPlan validate(AgentPlanner.PlannerPlan plan, int stepBudget) {
-        if (plan.skills().isEmpty() || plan.skills().size() > skillRegistry.list().size()) {
-            throw invalid("Planner must select between 1 and " + skillRegistry.list().size() + " skills");
+        int plannableSkillCount = skillRegistry.list().size() - 1;
+        if (plan.skills().isEmpty() || plan.skills().size() > plannableSkillCount) {
+            throw invalid("Planner must select between 1 and " + plannableSkillCount + " skills");
         }
         Set<String> selected = new HashSet<>();
         for (AgentPlanner.SkillSelection selection : plan.skills()) {
@@ -26,6 +30,9 @@ public class AgentPlanValidator {
                 throw invalid("Every selected skill must include a reason");
             }
             skillRegistry.require(selection.skillCode(), selection.skillVersion());
+            if (SkillRegistry.MEDIA_TYPE_SKILL.equals(selection.skillCode())) {
+                throw invalid("CLIP media typing is a pre-planning Harness step and cannot be selected twice");
+            }
             if (!selected.add(selection.skillCode())) {
                 throw invalid("Planner selected a duplicate skill: " + selection.skillCode());
             }

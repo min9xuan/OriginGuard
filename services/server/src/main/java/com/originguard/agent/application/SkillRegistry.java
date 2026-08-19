@@ -14,6 +14,8 @@ public class SkillRegistry {
     public static final String INTEGRITY_SKILL = "verify_media_integrity";
     public static final String METADATA_SKILL = "extract_image_metadata";
     public static final String SIMILARITY_SKILL = "compare_perceptual_similarity";
+    public static final String MEDIA_TYPE_SKILL = "classify_media_type_with_clip";
+    public static final String AIGC_DETECTION_SKILL = "detect_aigc_with_aide";
     public static final String RAG_SKILL = "retrieve_forensic_guidance";
     public static final String SKILL_VERSION = "1.0.0";
 
@@ -35,6 +37,14 @@ public class SkillRegistry {
                         SIMILARITY_SKILL, SKILL_VERSION,
                         "Compare 64-bit difference hashes for media linked to the same case",
                         permissions, statuses, Set.of(PerceptualSimilarityTool.CODE), 2),
+                new SkillDefinition(
+                        MEDIA_TYPE_SKILL, SKILL_VERSION,
+                        "Classify image media type with CLIP before LLM planning and detector interpretation",
+                        permissions, statuses, Set.of(ClipMediaTypeTool.CODE), 2),
+                new SkillDefinition(
+                        AIGC_DETECTION_SKILL, SKILL_VERSION,
+                        "Run the official AIDE hybrid-frequency AIGC image detector and preserve model provenance",
+                        permissions, statuses, Set.of(AigcDetectionTool.CODE), 2),
                 new SkillDefinition(
                         RAG_SKILL, SKILL_VERSION,
                         "Retrieve published forensic guidance with versioned chunk citations",

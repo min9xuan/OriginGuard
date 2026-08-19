@@ -12,10 +12,13 @@ os.environ.setdefault("HF_HOME", str(_RUNTIME_ROOT / "cache" / "huggingface"))
 os.environ.setdefault("TORCH_HOME", str(_RUNTIME_ROOT / "cache" / "torch"))
 
 import torch
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 from torch.nn import functional
 from transformers import AutoModel, AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase
+
+from originguard_model_api.aide import AideDetection, AideDetector, LocalAideDetector
+from originguard_model_api.clip_detector import ClipDetection, ClipDetector, LocalClipDetector
 
 MODEL_CODE = "LOCAL_BGE_SMALL_ZH_V1_5"
 MODEL_NAME = "BAAI/bge-small-zh-v1.5"
@@ -118,30 +121,54 @@ class LocalBgeEmbeddingService:
 
 
 _embedding_service: EmbeddingService = LocalBgeEmbeddingService()
+_aide_detector: AideDetector = LocalAideDetector(_REPOSITORY_ROOT, _RUNTIME_ROOT)
+_clip_detector: ClipDetector = LocalClipDetector(_REPOSITORY_ROOT, _RUNTIME_ROOT)
 
 
 def get_embedding_service() -> EmbeddingService:
     return _embedding_service
 
 
+def get_aide_detector() -> AideDetector:
+    return _aide_detector
+
+
+def get_clip_detector() -> ClipDetector:
+    return _clip_detector
+
+
 EmbeddingServiceDependency = Annotated[EmbeddingService, Depends(get_embedding_service)]
+AideDetectorDependency = Annotated[AideDetector, Depends(get_aide_detector)]
+ClipDetectorDependency = Annotated[ClipDetector, Depends(get_clip_detector)]
 
 
-app = FastAPI(title="OriginGuard Model API", version="0.2.0")
+app = FastAPI(title="OriginGuard Model API", version="0.7.0")
 
 
 @app.get("/health")
-def health(service: EmbeddingServiceDependency) -> dict[str, object]:
+def health(
+    service: EmbeddingServiceDependency,
+    aide: AideDetectorDependency,
+    clip_detector: ClipDetectorDependency,
+) -> dict[str, object]:
     return {
         "status": "UP",
         "service": "originguard-model-api",
         "timestamp": datetime.now(UTC).isoformat(),
         "embeddingModelLoaded": service.loaded,
+        "aideConfigured": aide.configured,
+        "aideModelLoaded": aide.loaded,
+        "clipConfigured": clip_detector.configured,
+        "clipModelLoaded": clip_detector.loaded,
     }
 
 
 @app.get("/v1/models")
-def list_models(service: EmbeddingServiceDependency) -> dict[str, list[object]]:
+def list_models(
+    service: EmbeddingServiceDependency,
+    aide: AideDetectorDependency,
+    clip_detector: ClipDetectorDependency,
+) -> dict[str, list[object]]:
     return {
         "items": [
             {
@@ -151,7 +178,23 @@ def list_models(service: EmbeddingServiceDependency) -> dict[str, list[object]]:
                 "dimensions": MODEL_DIMENSIONS,
                 "loaded": service.loaded,
                 "device": service.device_name,
-            }
+            },
+            {
+                "code": "AIDE_ICLR_2025_OFFICIAL",
+                "name": "AIDE GenImage train",
+                "type": "AIGC_IMAGE_DETECTION",
+                "configured": aide.configured,
+                "loaded": aide.loaded,
+                "device": aide.device_name,
+            },
+            {
+                "code": "OPENAI_CLIP_VIT_B_32",
+                "name": "OpenAI CLIP ViT-B/32",
+                "type": "MEDIA_TYPE_CLASSIFICATION",
+                "configured": clip_detector.configured,
+                "loaded": clip_detector.loaded,
+                "device": clip_detector.device_name,
+            },
         ]
     }
 
@@ -175,3 +218,38 @@ def create_embeddings(
         dimensions=MODEL_DIMENSIONS,
         embeddings=embeddings,
     )
+
+
+@app.post("/v1/aigc/detect", response_model=AideDetection, response_model_exclude_none=True)
+async def detect_aigc_image(
+    request: Request,
+    detector: AideDetectorDependency,
+) -> AideDetection:
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
+    if not content_type.startswith("image/"):
+        raise HTTPException(status_code=415, detail="AIDE endpoint accepts image content only")
+    content = await request.body()
+    try:
+        return detector.detect(content)
+    except (FileNotFoundError, RuntimeError) as exception:
+        raise HTTPException(status_code=503, detail=str(exception)) from exception
+    except ValueError as exception:
+        raise HTTPException(status_code=422, detail=str(exception)) from exception
+
+
+@app.post("/v1/media/classify", response_model=ClipDetection)
+@app.post("/v1/aigc/clip", response_model=ClipDetection, deprecated=True)
+async def classify_media_type(
+    request: Request,
+    detector: ClipDetectorDependency,
+) -> ClipDetection:
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
+    if not content_type.startswith("image/"):
+        raise HTTPException(status_code=415, detail="CLIP endpoint accepts image content only")
+    content = await request.body()
+    try:
+        return detector.detect(content)
+    except (FileNotFoundError, RuntimeError) as exception:
+        raise HTTPException(status_code=503, detail=str(exception)) from exception
+    except ValueError as exception:
+        raise HTTPException(status_code=422, detail=str(exception)) from exception

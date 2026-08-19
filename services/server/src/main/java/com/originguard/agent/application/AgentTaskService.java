@@ -18,6 +18,7 @@ import com.originguard.media.domain.MediaAsset;
 import com.originguard.shared.application.BusinessConflictException;
 import com.originguard.shared.application.ResourceNotFoundException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -39,6 +40,7 @@ public class AgentTaskService {
     private final ToolRegistry toolRegistry;
     private final AgentPolicyEngine policyEngine;
     private final AuditService auditService;
+    private final AgentArtifactStorage artifactStorage;
 
     public AgentTaskService(
             AgentTaskRepository repository,
@@ -50,7 +52,8 @@ public class AgentTaskService {
             SkillRegistry skillRegistry,
             ToolRegistry toolRegistry,
             AgentPolicyEngine policyEngine,
-            AuditService auditService) {
+            AuditService auditService,
+            AgentArtifactStorage artifactStorage) {
         this.repository = repository;
         this.caseRepository = caseRepository;
         this.actorProvider = actorProvider;
@@ -61,6 +64,7 @@ public class AgentTaskService {
         this.toolRegistry = toolRegistry;
         this.policyEngine = policyEngine;
         this.auditService = auditService;
+        this.artifactStorage = artifactStorage;
     }
 
     @Transactional
@@ -95,6 +99,28 @@ public class AgentTaskService {
         return details(actor.tenantId(), taskId);
     }
 
+    public AgentArtifactContent readObservationArtifact(
+            UUID taskId, UUID observationId, UUID artifactId) {
+        CurrentActor actor = actorProvider.getRequiredActor();
+        requireTask(actor.tenantId(), taskId);
+        AgentObservation observation = repository.findObservation(actor.tenantId(), taskId, observationId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "AGENT_OBSERVATION_NOT_FOUND", "Agent observation was not found"));
+        if (observation.assetId() == null || !"AIGC_DETECTION".equals(observation.evidenceType())) {
+            throw new ResourceNotFoundException(
+                    "AGENT_ARTIFACT_NOT_FOUND", "Agent visualization was not found");
+        }
+        Object artifactValue = observation.payload().get("attentionArtifact");
+        if (!(artifactValue instanceof Map<?, ?> artifact)
+                || !artifactId.toString().equals(String.valueOf(artifact.get("artifactId")))) {
+            throw new ResourceNotFoundException(
+                    "AGENT_ARTIFACT_NOT_FOUND", "Agent visualization was not found");
+        }
+        byte[] content = artifactStorage.readAttentionOverlay(
+                actor.tenantId(), taskId, observation.assetId(), artifactId);
+        return new AgentArtifactContent(content, "image/png");
+    }
+
     @Transactional
     public AgentTaskDetails run(UUID taskId, long expectedVersion) {
         CurrentActor actor = actorProvider.getRequiredActor();
@@ -126,11 +152,78 @@ public class AgentTaskService {
             MediaAsset primaryAsset = context.assets().stream().findFirst()
                     .orElseThrow(() -> new BusinessConflictException(
                             "AGENT_ASSET_REQUIRED", "Deterministic analysis requires a linked media asset"));
-            AgentPlanner.PlannerPlan generatedPlan = planner.plan(context, running.goal());
+
+            List<String> executedSkills = new ArrayList<>();
+            List<String> observationIds = new ArrayList<>();
+            List<String> knowledgeRetrievalIds = new ArrayList<>();
+            Map<String, Object> aigcDetection = Map.of();
+            int remainingBudget = running.remainingStepBudget();
+            long checkpointVersion = running.checkpointVersion();
+
+            remainingBudget = consumeBudget(remainingBudget);
+            SkillDefinition mediaTypeSkill = skillRegistry.require(
+                    SkillRegistry.MEDIA_TYPE_SKILL, SkillRegistry.SKILL_VERSION);
+            String mediaTypeToolCode = mediaTypeSkill.allowedTools().iterator().next();
+            policyEngine.requireCanRun(actor, investigationCase, mediaTypeSkill, mediaTypeToolCode);
+            repository.appendStep(
+                    actor.tenantId(), taskId, "SKILL_SELECTED", "SUCCEEDED",
+                    mediaTypeSkill.code(), null,
+                    Map.of("goal", running.goal()),
+                    Map.of(
+                            "skillCode", mediaTypeSkill.code(),
+                            "skillVersion", mediaTypeSkill.version(),
+                            "planner", "HARNESS_PRE_PLANNING",
+                            "reason", "先识别媒体类型，并将结果作为 LLM 规划和后续模型解释的受控上下文"));
+            remainingBudget = consumeBudget(remainingBudget);
+            AgentTool mediaTypeTool = toolRegistry.require(mediaTypeToolCode);
+            Map<String, Object> mediaTypeInput = Map.of(
+                    "agentTaskId", taskId.toString(),
+                    "caseId", investigationCase.id().toString(),
+                    "goal", running.goal(),
+                    "assetIds", context.assets().stream().map(MediaAsset::id).map(UUID::toString).toList());
+            Map<String, Object> mediaTypeOutput = mediaTypeTool.execute(context, mediaTypeInput);
+            repository.appendStep(
+                    actor.tenantId(), taskId, "TOOL_CALLED", "SUCCEEDED",
+                    mediaTypeSkill.code(), mediaTypeTool.code(), mediaTypeInput, mediaTypeOutput);
+            Map<UUID, Map<String, Object>> mediaTypeContexts = new LinkedHashMap<>();
+            for (Map<String, Object> finding : findings(mediaTypeOutput, "CLIP")) {
+                UUID assetId = UUID.fromString(String.valueOf(finding.get("assetId")));
+                mediaTypeContexts.put(assetId, finding);
+                AgentObservation observation = repository.insertObservation(
+                        actor.tenantId(), taskId, investigationCase.id(), assetId,
+                        evidenceTypeFor(mediaTypeSkill.code()), mediaTypeFindingSummary(finding), finding);
+                observationIds.add(observation.id().toString());
+                repository.appendStep(
+                        actor.tenantId(), taskId, "OBSERVATION_RECORDED", "SUCCEEDED",
+                        mediaTypeSkill.code(), mediaTypeTool.code(),
+                        Map.of("toolCode", mediaTypeTool.code(), "assetId", assetId.toString()),
+                        Map.of(
+                                "observationId", observation.id().toString(),
+                                "evidenceType", observation.evidenceType(),
+                                "summary", observation.summary()));
+            }
+            AgentExecutionContext enrichedContext = context.withMediaTypeContexts(mediaTypeContexts);
+            executedSkills.add(mediaTypeSkill.code());
+            checkpointVersion++;
+            repository.insertCheckpoint(
+                    actor.tenantId(), taskId, checkpointVersion,
+                    Map.of(
+                            "status", "MEDIA_TYPE_CONTEXT_READY",
+                            "completedSkills", List.copyOf(executedSkills),
+                            "observationIds", List.copyOf(observationIds),
+                            "knowledgeRetrievalIds", List.copyOf(knowledgeRetrievalIds),
+                            "remainingStepBudget", remainingBudget));
+            repository.appendStep(
+                    actor.tenantId(), taskId, "CHECKPOINT_SAVED", "SUCCEEDED",
+                    mediaTypeSkill.code(), null,
+                    Map.of("checkpointVersion", checkpointVersion),
+                    Map.of("remainingStepBudget", remainingBudget));
+
+            AgentPlanner.PlannerPlan generatedPlan = planner.plan(enrichedContext, running.goal());
             repository.appendStep(
                     actor.tenantId(), taskId, "PLAN_GENERATED", "SUCCEEDED",
                     generatedPlan.planCode(), null,
-                    Map.of("goal", running.goal(), "assetCount", context.assets().size()),
+                    Map.of("goal", running.goal(), "assetCount", enrichedContext.assets().size()),
                     Map.of(
                             "provider", generatedPlan.provider(),
                             "planCode", generatedPlan.planCode(),
@@ -146,22 +239,22 @@ public class AgentTaskService {
                                     .toList(),
                             "trace", generatedPlan.trace()));
             AgentPlanner.PlannerPlan plan = planValidator.validate(
-                    generatedPlan, running.remainingStepBudget());
+                    generatedPlan, remainingBudget);
             repository.appendStep(
                     actor.tenantId(), taskId, "PLAN_VALIDATED", "SUCCEEDED",
                     plan.planCode(), null,
                     Map.of("selectedSkillCount", plan.skills().size()),
                     Map.of(
                             "policyRequiredSkills", List.of(
-                                    SkillRegistry.INTEGRITY_SKILL, SkillRegistry.RAG_SKILL),
-                            "requiredStepBudget", plan.skills().size() * 2 + 1));
-            List<String> executedSkills = new ArrayList<>();
-            List<String> observationIds = new ArrayList<>();
-            List<String> knowledgeRetrievalIds = new ArrayList<>();
-            int remainingBudget = running.remainingStepBudget();
-            long checkpointVersion = running.checkpointVersion();
+                                    SkillRegistry.MEDIA_TYPE_SKILL,
+                                    SkillRegistry.INTEGRITY_SKILL,
+                                    SkillRegistry.AIGC_DETECTION_SKILL,
+                                    SkillRegistry.RAG_SKILL),
+                            "requiredStepBudget", 2 + plan.skills().size() * 2 + 1));
 
+            int planPosition = 0;
             for (AgentPlanner.SkillSelection selection : plan.skills()) {
+                planPosition++;
                 remainingBudget = consumeBudget(remainingBudget);
                 SkillDefinition skill = skillRegistry.require(selection.skillCode(), selection.skillVersion());
                 String toolCode = skill.allowedTools().iterator().next();
@@ -175,16 +268,21 @@ public class AgentTaskService {
                                 "skillVersion", skill.version(),
                                 "planner", plan.provider(),
                                 "reason", selection.reason(),
-                                "planPosition", executedSkills.size() + 1,
+                                "planPosition", planPosition,
                                 "planSize", plan.skills().size()));
 
                 remainingBudget = consumeBudget(remainingBudget);
                 AgentTool tool = toolRegistry.require(toolCode);
                 Map<String, Object> toolInput = Map.of(
+                        "agentTaskId", taskId.toString(),
                         "caseId", investigationCase.id().toString(),
                         "goal", running.goal(),
-                        "assetIds", context.assets().stream().map(MediaAsset::id).map(UUID::toString).toList());
-                Map<String, Object> toolOutput = tool.execute(context, toolInput);
+                        "assetIds", enrichedContext.assets().stream().map(MediaAsset::id).map(UUID::toString).toList(),
+                        "mediaTypeContexts", mediaTypeContextsForTool(enrichedContext.mediaTypeContexts()));
+                Map<String, Object> toolOutput = tool.execute(enrichedContext, toolInput);
+                if (SkillRegistry.AIGC_DETECTION_SKILL.equals(skill.code())) {
+                    aigcDetection = toolOutput;
+                }
                 repository.appendStep(
                         actor.tenantId(), taskId, "TOOL_CALLED", "SUCCEEDED",
                         skill.code(), tool.code(), toolInput, toolOutput);
@@ -205,10 +303,28 @@ public class AgentTaskService {
                                     "knowledgeRetrievalId", retrieval.id().toString(),
                                     "citationCount", retrieval.citations().size(),
                                     "knowledgeAvailable", retrieval.knowledgeAvailable()));
+                } else if (SkillRegistry.AIGC_DETECTION_SKILL.equals(skill.code())) {
+                    List<Map<String, Object>> findings = findings(toolOutput, "AIDE");
+                    for (Map<String, Object> finding : findings) {
+                        UUID assetId = UUID.fromString(String.valueOf(finding.get("assetId")));
+                        AgentObservation observation = repository.insertObservation(
+                                actor.tenantId(), taskId, investigationCase.id(), assetId,
+                                evidenceTypeFor(skill.code()), aigcFindingSummary(finding), finding);
+                        observationIds.add(observation.id().toString());
+                        repository.appendStep(
+                                actor.tenantId(), taskId, "OBSERVATION_RECORDED", "SUCCEEDED",
+                                skill.code(), tool.code(), Map.of("toolCode", tool.code(), "assetId", assetId.toString()),
+                                Map.of(
+                                        "observationId", observation.id().toString(),
+                                        "evidenceType", observation.evidenceType(),
+                                        "summary", observation.summary()));
+                    }
                 } else {
                     AgentObservation observation = repository.insertObservation(
                             actor.tenantId(), taskId, investigationCase.id(), primaryAsset.id(),
-                            evidenceTypeFor(skill.code()), summaryFor(skill.code(), context.assets().size()), toolOutput);
+                            evidenceTypeFor(skill.code()),
+                            summaryFor(skill.code(), enrichedContext.assets().size(), toolOutput),
+                            toolOutput);
                     observationIds.add(observation.id().toString());
                     repository.appendStep(
                             actor.tenantId(), taskId, "OBSERVATION_RECORDED", "SUCCEEDED",
@@ -236,19 +352,8 @@ public class AgentTaskService {
             }
 
             remainingBudget = consumeBudget(remainingBudget);
-            Map<String, Object> conclusion = Map.of(
-                    "verdict", "INCONCLUSIVE",
-                    "summary", "规划器选择的确定性检查和取证知识检索已完成；当前事实可辅助人工审核，"
-                            + "但不能独立证明媒体由 AI 生成。",
-                    "planner", plan.provider(),
-                    "plannerSummary", plan.summary(),
-                    "executedSkills", List.copyOf(executedSkills),
-                    "observationIds", List.copyOf(observationIds),
-                    "knowledgeRetrievalIds", List.copyOf(knowledgeRetrievalIds),
-                    "limitations", List.of(
-                            "尚未配置 C2PA 内容凭证校验器",
-                            "尚未接入 AIGC 分类器或篡改定位模型",
-                            plannerLimitation(plan.provider())));
+            Map<String, Object> conclusion = conclusionFor(
+                    plan, executedSkills, observationIds, knowledgeRetrievalIds, aigcDetection);
             repository.appendStep(
                     actor.tenantId(), taskId, "CONCLUSION_SYNTHESIZED", "SUCCEEDED",
                     plan.planCode(), null,
@@ -328,16 +433,113 @@ public class AgentTaskService {
             case SkillRegistry.INTEGRITY_SKILL -> "FILE_INTEGRITY";
             case SkillRegistry.METADATA_SKILL -> "IMAGE_METADATA";
             case SkillRegistry.SIMILARITY_SKILL -> "PERCEPTUAL_SIMILARITY";
+            case SkillRegistry.MEDIA_TYPE_SKILL -> "MEDIA_TYPE_CLASSIFICATION";
+            case SkillRegistry.AIGC_DETECTION_SKILL -> "AIGC_DETECTION";
             default -> throw new IllegalArgumentException("No evidence type for skill: " + skillCode);
         };
     }
 
-    private String summaryFor(String skillCode, int assetCount) {
+    private String summaryFor(String skillCode, int assetCount, Map<String, Object> toolOutput) {
         return switch (skillCode) {
             case SkillRegistry.INTEGRITY_SKILL -> "已对 " + assetCount + " 个媒体文件完成 SHA-256、字节数与 MIME 完整性核验。";
             case SkillRegistry.METADATA_SKILL -> "已对 " + assetCount + " 个图片完成格式、尺寸与 EXIF 摘要提取。";
             case SkillRegistry.SIMILARITY_SKILL -> "已对案件内 " + assetCount + " 个图片完成 dHash 感知相似度比较。";
+            case SkillRegistry.AIGC_DETECTION_SKILL -> "AIDE 已分析 "
+                    + toolOutput.getOrDefault("analyzedImageCount", 0)
+                    + " 个图片，最高 AI 生成概率为 "
+                    + percent(toolOutput.get("maximumSyntheticProbability"))
+                    + "；该结果是候选模型证据，仍需人工复核。";
             default -> throw new IllegalArgumentException("No summary for skill: " + skillCode);
+        };
+    }
+
+    private List<Map<String, Object>> findings(Map<String, Object> toolOutput, String source) {
+        Object raw = toolOutput.get("findings");
+        if (!(raw instanceof List<?> values) || values.isEmpty()) {
+            throw new IllegalStateException(source + " did not return per-image findings");
+        }
+        List<Map<String, Object>> findings = new ArrayList<>();
+        for (Object value : values) {
+            if (!(value instanceof Map<?, ?> map)) continue;
+            Map<String, Object> finding = new LinkedHashMap<>();
+            map.forEach((key, item) -> finding.put(String.valueOf(key), item));
+            findings.add(Map.copyOf(finding));
+        }
+        if (findings.isEmpty()) throw new IllegalStateException(source + " findings are invalid");
+        return List.copyOf(findings);
+    }
+
+    private Map<String, Object> mediaTypeContextsForTool(
+            Map<UUID, Map<String, Object>> contexts) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        contexts.forEach((assetId, context) -> result.put(assetId.toString(), context));
+        return Map.copyOf(result);
+    }
+
+    private String mediaTypeFindingSummary(Map<String, Object> finding) {
+        return "CLIP 将“" + finding.getOrDefault("filename", "当前图片") + "”识别为“"
+                + finding.getOrDefault("mediaTypeLabel", "类型不明确") + "”，类型相对匹配度为 "
+                + percent(finding.get("mediaTypeScore"))
+                + "；该结果用于规划检测策略，不直接判断是否由 AI 生成。";
+    }
+
+    private String aigcFindingSummary(Map<String, Object> finding) {
+        Object explanationValue = finding.get("explanation");
+        if (explanationValue instanceof Map<?, ?> explanation) {
+            Object summary = explanation.get("summary");
+            if (summary != null && !String.valueOf(summary).isBlank()) return String.valueOf(summary);
+        }
+        return "AIDE 已分析“" + finding.getOrDefault("filename", "当前图片") + "”，AI 生成概率为 "
+                + percent(finding.get("syntheticProbability")) + "；该结果仍需人工复核。";
+    }
+
+    private Map<String, Object> conclusionFor(
+            AgentPlanner.PlannerPlan plan,
+            List<String> executedSkills,
+            List<String> observationIds,
+            List<String> knowledgeRetrievalIds,
+            Map<String, Object> aigcDetection) {
+        String verdict = String.valueOf(aigcDetection.getOrDefault("overallVerdict", "INCONCLUSIVE"));
+        String score = percent(aigcDetection.get("maximumSyntheticProbability"));
+        String summary = aigcDetection.isEmpty()
+                ? "自动取证步骤已完成，但没有取得 AIDE 检测结果，当前证据不足以判断。"
+                : "质量门控与 AIGC 证据融合已完成；AIDE 最高 AI 生成概率为 " + score
+                        + "，融合结果为“" + verdictLabel(verdict) + "”。该结果不是审核员最终裁决。";
+        List<String> limitations = new ArrayList<>();
+        limitations.add("AIDE 分数未经本项目业务数据校准，压缩、截图和未知生成器可能影响泛化能力");
+        limitations.add("只有在第二个独立检测器可用且证据方向一致时，系统才形成方向性融合结论");
+        limitations.add("尚未配置 C2PA 内容凭证校验器和篡改区域定位模型");
+        limitations.add(plannerLimitation(plan.provider()));
+        Map<String, Object> conclusion = new LinkedHashMap<>();
+        conclusion.put("verdict", verdict);
+        conclusion.put("summary", summary);
+        conclusion.put("primaryModelClassification",
+                aigcDetection.getOrDefault("overallClassification", "INCONCLUSIVE"));
+        conclusion.put("fusionPolicyVersion", AigcEvidenceFusion.POLICY_VERSION);
+        if (aigcDetection.get("maximumSyntheticProbability") != null) {
+            conclusion.put("aideSyntheticProbability", aigcDetection.get("maximumSyntheticProbability"));
+        }
+        conclusion.put("planner", plan.provider());
+        conclusion.put("plannerSummary", plan.summary());
+        conclusion.put("executedSkills", List.copyOf(executedSkills));
+        conclusion.put("observationIds", List.copyOf(observationIds));
+        conclusion.put("knowledgeRetrievalIds", List.copyOf(knowledgeRetrievalIds));
+        conclusion.put("limitations", List.copyOf(limitations));
+        return Map.copyOf(conclusion);
+    }
+
+    private String percent(Object value) {
+        if (!(value instanceof Number number)) return "未知";
+        return String.format(java.util.Locale.ROOT, "%.1f%%", number.doubleValue() * 100.0);
+    }
+
+    private String verdictLabel(String verdict) {
+        return switch (verdict) {
+            case "LIKELY_SYNTHETIC" -> "倾向 AI 生成";
+            case "LIKELY_AUTHENTIC" -> "倾向真实";
+            case "CONFLICTING_EVIDENCE" -> "证据冲突";
+            case "UNSUPPORTED_INPUT" -> "输入不适用";
+            default -> "证据不足";
         };
     }
 
@@ -398,6 +600,12 @@ public class AgentTaskService {
             observations = List.copyOf(observations);
             knowledgeRetrievals = List.copyOf(knowledgeRetrievals);
             checkpoints = List.copyOf(checkpoints);
+        }
+    }
+
+    public record AgentArtifactContent(byte[] content, String contentType) {
+        public AgentArtifactContent {
+            content = content.clone();
         }
     }
 }

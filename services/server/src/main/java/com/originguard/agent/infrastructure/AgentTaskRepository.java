@@ -358,7 +358,7 @@ public class AgentTaskRepository {
                 .query(this::mapStep).optional();
     }
 
-    private Optional<AgentObservation> findObservation(UUID tenantId, UUID taskId, UUID id) {
+    public Optional<AgentObservation> findObservation(UUID tenantId, UUID taskId, UUID id) {
         return jdbcClient.sql("""
                         SELECT id, task_id, case_id, asset_id, evidence_type, summary,
                                payload::text AS payload, created_at

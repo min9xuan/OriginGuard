@@ -1,5 +1,5 @@
 import type { AgentTask, AgentTaskDetails } from '../types/agent'
-import { apiRequest } from './http'
+import { apiBlobRequest, apiRequest } from './http'
 
 export const agentApi = {
   list(accessToken: string) {
@@ -26,6 +26,12 @@ export const agentApi = {
     return apiRequest<AgentTaskDetails>(
       `/agent-tasks/${taskId}/cancel`,
       { method: 'POST', body: JSON.stringify({ version }) },
+      accessToken,
+    )
+  },
+  artifact(taskId: string, observationId: string, artifactId: string, accessToken: string) {
+    return apiBlobRequest(
+      `/agent-tasks/${taskId}/observations/${observationId}/artifacts/${artifactId}`,
       accessToken,
     )
   },

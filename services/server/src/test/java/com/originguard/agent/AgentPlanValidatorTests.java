@@ -18,9 +18,10 @@ class AgentPlanValidatorTests {
     void acceptsWhitelistedPlanWithMandatorySkillsAndSufficientBudget() {
         AgentPlanner.PlannerPlan plan = plan(List.of(
                 skill(SkillRegistry.INTEGRITY_SKILL),
+                skill(SkillRegistry.AIGC_DETECTION_SKILL),
                 skill(SkillRegistry.RAG_SKILL)));
 
-        assertThat(validator.validate(plan, 5)).isSameAs(plan);
+        assertThat(validator.validate(plan, 7)).isSameAs(plan);
     }
 
     @Test

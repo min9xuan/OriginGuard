@@ -6,6 +6,7 @@ import { ApiRequestError } from '../api/http'
 import { useAuthStore } from '../stores/auth'
 import type {
   KnowledgeDocument, KnowledgeDocumentType, KnowledgeSearchResult, RagEvaluationCase, RagEvaluationRun,
+  RagExternalKnowledgeCandidate, RagKnowledgeVenue,
 } from '../types/knowledge'
 import { formatDate } from '../utils/format'
 
@@ -18,12 +19,27 @@ const debug = reactive({ query: '', topK: 5 })
 const searchResults = ref<KnowledgeSearchResult[]>([])
 const evaluationCases = ref<RagEvaluationCase[]>([])
 const evaluationRun = ref<RagEvaluationRun | null>(null)
+const expansionVenues = ref<RagKnowledgeVenue[]>([])
+const expansionCandidates = ref<RagExternalKnowledgeCandidate[]>([])
+const expansionSearching = ref(false)
+const draftingCandidateId = ref('')
+const currentYear = new Date().getFullYear()
+const expansion = reactive({
+  query: 'AI-generated image detection media forgery content provenance',
+  venueCodes: ['CVPR', 'ICCV', 'ECCV'],
+  fromYear: currentYear - 3,
+  toYear: currentYear,
+  limit: 10,
+})
 
 async function load() {
   loading.value = true
   try {
     documents.value = await knowledgeApi.list(auth.accessToken)
     evaluationCases.value = await knowledgeApi.listEvaluationCases(auth.accessToken)
+    if (auth.hasPermission('knowledge:upload')) {
+      expansionVenues.value = await knowledgeApi.listExpansionVenues(auth.accessToken)
+    }
   }
   catch (error) { showError(error) }
   finally { loading.value = false }
@@ -73,6 +89,33 @@ async function reindex() {
     ElMessage.success(`已使用 ${result.embeddingProvider} 重新向量化 ${result.chunkCount} 个 Chunk`)
   } catch (error) { showError(error) } finally { saving.value = false }
 }
+async function discoverKnowledge() {
+  if (!expansion.query.trim()) return ElMessage.warning('请输入需要扩展的 RAG 知识主题')
+  if (!expansion.venueCodes.length) return ElMessage.warning('请至少选择一个会议或期刊')
+  expansionSearching.value = true
+  try {
+    const result = await knowledgeApi.discoverKnowledge(
+      expansion.query, expansion.venueCodes, expansion.fromYear, expansion.toYear,
+      expansion.limit, auth.accessToken,
+    )
+    expansionCandidates.value = result.candidates
+    ElMessage.success(`检索完成，获得 ${result.candidates.length} 条 RAG 候选知识`)
+  } catch (error) { showError(error) } finally { expansionSearching.value = false }
+}
+async function createExternalDraft(candidate: RagExternalKnowledgeCandidate) {
+  draftingCandidateId.value = candidate.sourceIdentifier
+  try {
+    await knowledgeApi.createExternalDraft(candidate, auth.accessToken)
+    expansionCandidates.value = expansionCandidates.value.filter(
+      item => item.sourceIdentifier !== candidate.sourceIdentifier,
+    )
+    ElMessage.success('已生成待审核知识草稿，审核发布后才会进入 Agent RAG')
+    await load()
+  } catch (error) { showError(error) } finally { draftingCandidateId.value = '' }
+}
+function sourceScopeLabel(scope: KnowledgeDocument['sourceScope']) {
+  return ({ TENANT: '租户知识', BUILTIN: '系统内置', EXTERNAL: '外部学术来源' } as const)[scope]
+}
 function showError(error: unknown) {
   ElMessage.error(error instanceof ApiRequestError ? error.message : '知识库请求失败')
 }
@@ -97,6 +140,55 @@ onMounted(load)
         <el-form-item label="正文"><el-input v-model="form.content" type="textarea" :rows="10" /></el-form-item>
         <el-button type="primary" :loading="saving" @click="create">保存草稿</el-button>
       </el-form>
+    </section>
+    <section v-if="auth.hasPermission('knowledge:upload')" class="panel">
+      <div class="section-heading">
+        <div>
+          <h2>RAG 知识扩展</h2>
+          <p>点击时只检索权威学术元数据与摘要，不下载论文 PDF；候选内容生成草稿后需人工审核发布。</p>
+        </div>
+      </div>
+      <el-form label-position="top">
+        <el-form-item label="知识主题">
+          <el-input v-model="expansion.query" maxlength="300"
+            placeholder="例如：AIGC 图像检测、媒体篡改定位、内容溯源与生成模型归因" />
+        </el-form-item>
+        <el-form-item label="权威会议与期刊（最多 6 个）">
+          <el-select v-model="expansion.venueCodes" multiple collapse-tags :max-collapse-tags="4"
+            placeholder="选择 RAG 知识来源">
+            <el-option v-for="venue in expansionVenues" :key="venue.code"
+              :label="`${venue.code} · ${venue.name}`" :value="venue.code"
+              :disabled="!expansion.venueCodes.includes(venue.code) && expansion.venueCodes.length >= 6" />
+          </el-select>
+        </el-form-item>
+        <div class="knowledge-expansion-filters">
+          <el-form-item label="起始年份"><el-input-number v-model="expansion.fromYear" :min="2000" :max="currentYear + 1" /></el-form-item>
+          <el-form-item label="截止年份"><el-input-number v-model="expansion.toYear" :min="2000" :max="currentYear + 1" /></el-form-item>
+          <el-form-item label="候选数量"><el-input-number v-model="expansion.limit" :min="1" :max="30" /></el-form-item>
+        </div>
+        <el-button type="primary" :loading="expansionSearching" @click="discoverKnowledge">检索候选知识</el-button>
+      </el-form>
+      <p v-if="expansionCandidates.length" class="knowledge-expansion-summary">
+        本次获得 {{ expansionCandidates.length }} 条候选知识。以下内容尚未进入正式 RAG。
+      </p>
+      <article v-for="candidate in expansionCandidates" :key="candidate.sourceIdentifier" class="observation-card">
+        <div>
+          <strong>{{ candidate.title }}</strong>
+          <el-tag>{{ candidate.venueCode }} {{ candidate.publicationYear }}</el-tag>
+          <el-tag type="warning">候选知识</el-tag>
+        </div>
+        <p>{{ candidate.abstractText }}</p>
+        <small>
+          {{ candidate.authors.slice(0, 5).join('、') || '作者信息缺失' }} · 被引 {{ candidate.citedByCount }} 次 ·
+          <a :href="candidate.sourceUrl" target="_blank" rel="noopener noreferrer">核对来源</a>
+        </small>
+        <div>
+          <el-button type="success" plain
+            :loading="draftingCandidateId === candidate.sourceIdentifier"
+            @click="createExternalDraft(candidate)">生成待审核知识草稿</el-button>
+        </div>
+      </article>
+      <el-empty v-if="!expansionCandidates.length && !expansionSearching" description="设置主题后检索 RAG 候选知识" />
     </section>
     <section class="panel">
       <div class="section-heading"><div><h2>RAG 检索调试</h2><p>直接查看 Top-K、引用和各路分数，不需要运行 Agent</p></div></div>
@@ -137,8 +229,12 @@ onMounted(load)
       <div class="section-heading"><div><h2>知识文档</h2><p>{{ documents.length }} 份当前租户文档</p></div></div>
       <div v-for="document in documents" :key="document.id" class="observation-card">
         <div><strong>{{ document.title }}</strong> <el-tag>{{ document.documentType }}</el-tag>
+          <el-tag type="info">{{ sourceScopeLabel(document.sourceScope) }} · 优先级 {{ document.sourcePriority }}</el-tag>
           <el-tag :type="document.status === 'PUBLISHED' ? 'success' : 'warning'">{{ document.status }}</el-tag></div>
-        <p>发布版本 v{{ document.publishedVersion }} · 数据版本 {{ document.version }} · {{ formatDate(document.updatedAt) }}</p>
+        <p>发布版本 v{{ document.publishedVersion }} · 数据版本 {{ document.version }} · {{ formatDate(document.updatedAt) }}
+          <template v-if="document.sourceVenue"> · {{ document.sourceVenue }} {{ document.sourceYear }}</template>
+          <template v-if="document.sourceUrl"> · <a :href="document.sourceUrl" target="_blank" rel="noopener noreferrer">来源页面</a></template>
+        </p>
         <pre>{{ document.content }}</pre>
         <el-button v-if="document.status === 'DRAFT' && auth.hasPermission('knowledge:publish')" type="success"
           plain :loading="saving" @click="publish(document)">发布并建立索引</el-button>
@@ -146,3 +242,9 @@ onMounted(load)
     </section>
   </main>
 </template>
+
+<style scoped>
+.knowledge-expansion-filters { display: flex; flex-wrap: wrap; gap: 16px; }
+.knowledge-expansion-summary { margin: 20px 0 8px; color: #8da4ae; }
+.observation-card a { color: #48d8b0; }
+</style>

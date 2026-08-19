@@ -1,23 +1,32 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus'
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { agentApi } from '../api/agents'
+import { caseApi } from '../api/cases'
 import { ApiRequestError } from '../api/http'
 import { useAuthStore } from '../stores/auth'
 import type { AgentTask } from '../types/agent'
+import type { InvestigationCase } from '../types/business'
 import { formatDate } from '../utils/format'
 import { agentStatusLabel } from '../utils/presentation'
 
 const auth = useAuthStore()
 const router = useRouter()
 const tasks = ref<AgentTask[]>([])
+const cases = ref<InvestigationCase[]>([])
 const loading = ref(false)
+const casesById = computed(() => new Map(cases.value.map((item) => [item.id, item])))
 
 async function load() {
   loading.value = true
   try {
-    tasks.value = await agentApi.list(auth.accessToken)
+    const [taskResult, caseResult] = await Promise.all([
+      agentApi.list(auth.accessToken),
+      caseApi.list(auth.accessToken),
+    ])
+    tasks.value = taskResult
+    cases.value = caseResult
   } catch (error) {
     ElMessage.error(error instanceof ApiRequestError ? error.message : 'Agent 任务加载失败')
   } finally {
@@ -27,6 +36,14 @@ async function load() {
 
 function open(task: AgentTask) {
   void router.push(`/agent-tasks/${task.id}`)
+}
+
+function openCase(caseId: string) {
+  void router.push(`/cases/${caseId}`)
+}
+
+function sourceCase(task: AgentTask) {
+  return casesById.value.get(task.caseId)
 }
 
 function planLabel(task: AgentTask) {
@@ -63,6 +80,14 @@ onMounted(load)
         <el-button plain :loading="loading" @click="load">刷新</el-button>
       </div>
       <el-table :data="tasks" v-loading="loading" empty-text="还没有 Agent 任务" row-class-name="clickable-row" @row-click="open">
+        <el-table-column label="所属调查案件" min-width="220">
+          <template #default="scope">
+            <button class="agent-case-link" type="button" @click.stop="openCase(scope.row.caseId)">
+              <strong>{{ sourceCase(scope.row)?.caseNumber || '案件记录' }}</strong>
+              <span>{{ sourceCase(scope.row)?.title || scope.row.caseId }}</span>
+            </button>
+          </template>
+        </el-table-column>
         <el-table-column prop="goal" label="任务内容" min-width="280" />
         <el-table-column label="状态" width="130">
           <template #default="scope"><span class="status-pill" :data-status="scope.row.status">{{ agentStatusLabel(scope.row.status) }}</span></template>

@@ -12,6 +12,8 @@ import java.net.URI;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.MediaType;
+import org.springframework.http.HttpHeaders;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -50,6 +52,21 @@ public class AgentTaskController {
         return service.get(taskId);
     }
 
+    @GetMapping("/{taskId}/observations/{observationId}/artifacts/{artifactId}")
+    @PreAuthorize("hasAuthority('agent:trace:read')")
+    public ResponseEntity<byte[]> artifact(
+            @PathVariable UUID taskId,
+            @PathVariable UUID observationId,
+            @PathVariable UUID artifactId) {
+        var artifact = service.readObservationArtifact(taskId, observationId, artifactId);
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(artifact.contentType()))
+                .contentLength(artifact.content().length)
+                .header(HttpHeaders.CACHE_CONTROL, "private, max-age=300")
+                .header("X-Content-Type-Options", "nosniff")
+                .body(artifact.content());
+    }
+
     @PostMapping("/{taskId}/run")
     @PreAuthorize("hasAuthority('agent:run')")
     public AgentTaskService.AgentTaskDetails run(
@@ -67,7 +84,7 @@ public class AgentTaskController {
     public record CreateAgentTaskRequest(
             @NotNull UUID caseId,
             @NotBlank @Size(max = 500) String goal,
-            @Min(9) @Max(12) int stepBudget) {}
+            @Min(9) @Max(16) int stepBudget) {}
 
     public record VersionRequest(@Min(0) long version) {}
 }

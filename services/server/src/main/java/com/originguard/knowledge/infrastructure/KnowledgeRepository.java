@@ -18,6 +18,8 @@ import org.springframework.stereotype.Repository;
 public class KnowledgeRepository {
     private static final String DOCUMENT_SELECT = """
             SELECT id, tenant_id, title, document_type, content, status, published_version,
+                   source_scope, source_priority, source_provider, source_identifier,
+                   source_url, source_venue, source_year,
                    created_by, updated_by, version, created_at, updated_at, published_at
             FROM knowledge_document
             """;
@@ -34,6 +36,38 @@ public class KnowledgeRepository {
                 .param("id", id).param("tenantId", tenantId).param("title", title)
                 .param("type", type).param("content", content).param("actorId", actorId).update();
         return findById(tenantId, id).orElseThrow();
+    }
+
+    public KnowledgeDocument insertExternalDraft(
+            UUID id, UUID tenantId, String title, String type, String content, UUID actorId,
+            String provider, String identifier, String sourceUrl, String venue, int year) {
+        jdbcClient.sql("""
+                        INSERT INTO knowledge_document(
+                            id, tenant_id, title, document_type, content, source_scope, source_priority,
+                            source_provider, source_identifier, source_url, source_venue, source_year,
+                            created_by, updated_by
+                        ) VALUES (
+                            :id, :tenantId, :title, :type, :content, 'EXTERNAL', 40,
+                            :provider, :identifier, :sourceUrl, :venue, :year, :actorId, :actorId
+                        )
+                        """)
+                .param("id", id).param("tenantId", tenantId).param("title", title)
+                .param("type", type).param("content", content).param("provider", provider)
+                .param("identifier", identifier).param("sourceUrl", sourceUrl)
+                .param("venue", venue).param("year", year).param("actorId", actorId).update();
+        return findById(tenantId, id).orElseThrow();
+    }
+
+    public boolean externalSourceExists(UUID tenantId, String provider, String identifier) {
+        return jdbcClient.sql("""
+                        SELECT EXISTS(
+                            SELECT 1 FROM knowledge_document
+                            WHERE tenant_id = :tenantId AND source_provider = :provider
+                              AND source_identifier = :identifier
+                        )
+                        """)
+                .param("tenantId", tenantId).param("provider", provider).param("identifier", identifier)
+                .query(Boolean.class).single();
     }
 
     public Optional<KnowledgeDocument> findById(UUID tenantId, UUID id) {
@@ -117,7 +151,7 @@ public class KnowledgeRepository {
         String vectorType = "vector(" + dimensions + ")";
         String sql = """
                         WITH scored AS (
-                            SELECT d.id AS document_id, d.title, d.document_type,
+                            SELECT d.id AS document_id, d.title, d.document_type, d.source_priority,
                                    c.document_version, c.id AS chunk_id, c.chunk_index, c.content,
                                    GREATEST(0.0, 1.0 - (e.embedding::%s <=> CAST(:embedding AS %s))) AS semantic_score,
                                    CASE WHEN c.search_vector @@ websearch_to_tsquery('simple', :query)
@@ -133,7 +167,9 @@ public class KnowledgeRepository {
                               AND d.status = 'PUBLISHED'
                               AND c.document_version = d.published_version
                         )
-                        SELECT *, (semantic_score * 0.70 + LEAST(keyword_score, 1.0) * 0.30) AS hybrid_score
+                        SELECT *,
+                               ((semantic_score * 0.70 + LEAST(keyword_score, 1.0) * 0.30) * 0.85
+                                + (source_priority::double precision / 100.0) * 0.15) AS hybrid_score
                         FROM scored
                         ORDER BY hybrid_score DESC, document_id, chunk_index
                         LIMIT :limit
@@ -290,7 +326,10 @@ public class KnowledgeRepository {
         return new KnowledgeDocument(
                 rs.getObject("id", UUID.class), rs.getObject("tenant_id", UUID.class), rs.getString("title"),
                 rs.getString("document_type"), rs.getString("content"), rs.getString("status"),
-                rs.getInt("published_version"), rs.getObject("created_by", UUID.class),
+                rs.getInt("published_version"), rs.getString("source_scope"), rs.getInt("source_priority"),
+                rs.getString("source_provider"), rs.getString("source_identifier"),
+                rs.getString("source_url"), rs.getString("source_venue"),
+                (Integer) rs.getObject("source_year"), rs.getObject("created_by", UUID.class),
                 rs.getObject("updated_by", UUID.class), rs.getLong("version"),
                 rs.getTimestamp("created_at").toInstant(), rs.getTimestamp("updated_at").toInstant(),
                 publishedAt == null ? null : publishedAt.toInstant());

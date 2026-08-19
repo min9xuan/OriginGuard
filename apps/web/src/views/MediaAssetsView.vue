@@ -18,7 +18,7 @@ const draft = ref<RegisterAssetRequest | null>(null)
 const previewUrl = ref('')
 const previewName = ref('')
 const previewVisible = ref(false)
-const previewLoading = ref(false)
+const previewLoadingId = ref('')
 
 async function load() {
   loading.value = true
@@ -69,8 +69,8 @@ async function register() {
 }
 
 async function preview(asset: MediaAsset) {
-  if (asset.storageStatus !== 'STORED') return
-  previewLoading.value = true
+  if (asset.storageStatus !== 'STORED' || previewLoadingId.value) return
+  previewLoadingId.value = asset.id
   try {
     if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
     previewUrl.value = URL.createObjectURL(await mediaApi.content(asset.id, auth.accessToken))
@@ -79,7 +79,7 @@ async function preview(asset: MediaAsset) {
   } catch (error) {
     showError(error)
   } finally {
-    previewLoading.value = false
+    previewLoadingId.value = ''
   }
 }
 
@@ -142,12 +142,12 @@ onBeforeUnmount(() => {
         <el-table-column label="内容" width="100">
           <template #default="scope">
             <el-button
-              text
+              plain
               type="primary"
               :disabled="scope.row.storageStatus !== 'STORED'"
-              :loading="previewLoading"
+              :loading="previewLoadingId === scope.row.id"
               @click.stop="preview(scope.row)"
-            >预览</el-button>
+            >{{ scope.row.storageStatus === 'STORED' ? '预览' : '无原文件' }}</el-button>
           </template>
         </el-table-column>
       </el-table>
