@@ -28,3 +28,7 @@ target-version = "py311"
 [tool.mypy]
 python_version = "3.11"
 strict = true
+
+[[tool.mypy.overrides]]
+module = ["clip", "torchvision", "torchvision.*", "data.dct", "models.AIDE"]
+ignore_missing_imports = true

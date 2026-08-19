@@ -5,7 +5,7 @@ import os
 import time
 from pathlib import Path
 from threading import Lock
-from typing import Protocol
+from typing import Any, Protocol, cast
 
 import clip
 import torch
@@ -104,8 +104,10 @@ class LocalClipDetector:
         self._model_path = (path if path.is_absolute() else repository_root / path).resolve()
         self._requested_device = os.getenv("CLIP_DEVICE", "auto").lower()
         self._device = torch.device("cpu")
-        self._model: torch.nn.Module | None = None
-        self._preprocess = None
+        # OpenAI CLIP does not publish PEP 561 types. Keep the untyped value at
+        # this adapter boundary and expose typed tensors to the rest of the API.
+        self._model: Any | None = None
+        self._preprocess: Any | None = None
         self._media_type_features: torch.Tensor | None = None
         self._load_lock = Lock()
         self._inference_lock = Lock()
@@ -134,8 +136,8 @@ class LocalClipDetector:
         assert self._media_type_features is not None
         started = time.perf_counter()
         with self._inference_lock, torch.inference_mode():
-            image_input = self._preprocess(image).unsqueeze(0).to(self._device)
-            image_features = self._model.encode_image(image_input).float()
+            image_input: torch.Tensor = self._preprocess(image).unsqueeze(0).to(self._device)
+            image_features: torch.Tensor = self._model.encode_image(image_input).float()
             image_features = image_features / image_features.norm(dim=-1, keepdim=True)
             media_type, media_score, media_margin, type_scores = self._classify_media_type(
                 image_features
@@ -185,11 +187,13 @@ class LocalClipDetector:
             self._preprocess = preprocess
 
     def _encode_prompt_groups(
-        self, model: torch.nn.Module, groups: list[tuple[str, ...]]
+        self, model: Any, groups: list[tuple[str, ...]]
     ) -> torch.Tensor:
         prototypes: list[torch.Tensor] = []
         for prompts in groups:
-            features = model.encode_text(clip.tokenize(list(prompts)).to(self._device)).float()
+            features: torch.Tensor = model.encode_text(
+                clip.tokenize(list(prompts)).to(self._device)
+            ).float()
             features = features / features.norm(dim=-1, keepdim=True)
             prototype = features.mean(dim=0)
             prototypes.append(prototype / prototype.norm())
@@ -197,7 +201,9 @@ class LocalClipDetector:
 
     def _scores(self, image_features: torch.Tensor, class_features: torch.Tensor) -> torch.Tensor:
         assert self._model is not None
-        logits = self._model.logit_scale.exp().float() * image_features @ class_features.T
+        logits: torch.Tensor = (
+            self._model.logit_scale.exp().float() * image_features @ class_features.T
+        )
         return logits.softmax(dim=-1)[0].cpu()
 
     def _classify_media_type(
@@ -236,6 +242,6 @@ class LocalClipDetector:
             with Image.open(io.BytesIO(content)) as source:
                 source.verify()
             with Image.open(io.BytesIO(content)) as source:
-                return source.convert("RGB")
+                return cast(Image.Image, source.convert("RGB"))
         except (UnidentifiedImageError, OSError) as exception:
             raise ValueError("CLIP input is not a supported image") from exception

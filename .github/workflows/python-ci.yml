@@ -14,5 +14,5 @@ jobs:
         with: { python-version: '3.11', cache: pip }
       - run: python -m pip install -e "services/model-api[dev]"
       - run: ruff check services/model-api
-      - run: mypy services/model-api/src
+      - run: mypy --config-file services/model-api/pyproject.toml services/model-api/src
       - run: pytest services/model-api

@@ -102,7 +102,7 @@ class LocalBgeEmbeddingService:
                     "Run the project model download command first."
                 )
             self._device = self._resolve_device()
-            self._tokenizer = AutoTokenizer.from_pretrained(
+            self._tokenizer = AutoTokenizer.from_pretrained(  # type: ignore[no-untyped-call]
                 self._model_path, local_files_only=True
             )
             self._model = AutoModel.from_pretrained(

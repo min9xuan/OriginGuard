@@ -8,7 +8,7 @@ import sys
 import time
 from pathlib import Path
 from threading import Lock
-from typing import Protocol
+from typing import Any, Protocol, cast
 
 import numpy as np
 import torch
@@ -95,8 +95,10 @@ class LocalAideDetector:
         self._requested_precision = os.getenv("AIDE_PRECISION", "auto").lower()
         self._device = torch.device("cpu")
         self._precision = "float32"
-        self._model: torch.nn.Module | None = None
-        self._preprocessor: torch.nn.Module | None = None
+        # The official AIDE repository is loaded dynamically and has no PEP
+        # 561 type metadata. Confine Any to this third-party adapter boundary.
+        self._model: Any | None = None
+        self._preprocessor: Any | None = None
         self._checkpoint_sha256 = ""
         self._load_lock = Lock()
         self._inference_lock = Lock()
@@ -144,7 +146,7 @@ class LocalAideDetector:
         assert self._model is not None
         started = time.perf_counter()
         with self._inference_lock:
-            batch = self._preprocess(image).unsqueeze(0).to(self._device)
+            batch: torch.Tensor = self._preprocess(image).unsqueeze(0).to(self._device)
             if self._precision == "float16":
                 batch = batch.half()
             logits, attention = self._forward_with_attention(batch)
@@ -244,7 +246,7 @@ class LocalAideDetector:
         model = self._model
         x_min, x_max, x_min_second, x_max_second, tokens = [batch[:, index] for index in range(5)]
         with torch.no_grad():
-            frequency = (
+            frequency: torch.Tensor = (
                 model.model_min(model.hpf(x_min))
                 + model.model_max(model.hpf(x_max))
                 + model.model_min(model.hpf(x_min_second))
@@ -254,12 +256,12 @@ class LocalAideDetector:
             clip_std = torch.tensor([0.26862954, 0.26130258, 0.27577711], device=tokens.device, dtype=tokens.dtype).view(3, 1, 1)
             imagenet_mean = torch.tensor([0.485, 0.456, 0.406], device=tokens.device, dtype=tokens.dtype).view(3, 1, 1)
             imagenet_std = torch.tensor([0.229, 0.224, 0.225], device=tokens.device, dtype=tokens.dtype).view(3, 1, 1)
-            semantic_map = model.openclip_convnext_xxl(
+            semantic_map: torch.Tensor = model.openclip_convnext_xxl(
                 tokens * (imagenet_std / clip_std) + (imagenet_mean - clip_mean) / clip_std
             )
         semantic_map = semantic_map.detach().requires_grad_(True)
-        semantic = model.convnext_proj(model.avgpool(semantic_map).flatten(1))
-        logits = model.fc(torch.cat([semantic, frequency], dim=1))
+        semantic: torch.Tensor = model.convnext_proj(model.avgpool(semantic_map).flatten(1))
+        logits: torch.Tensor = model.fc(torch.cat([semantic, frequency], dim=1))
         target_index = int(logits.detach().argmax(dim=1)[0].item())
         gradients = torch.autograd.grad(logits[0, target_index], semantic_map)[0]
         weights = gradients.mean(dim=(2, 3), keepdim=True)
@@ -364,7 +366,7 @@ class LocalAideDetector:
             with Image.open(io.BytesIO(content)) as source:
                 source.verify()
             with Image.open(io.BytesIO(content)) as source:
-                return source.convert("RGB")
+                return cast(Image.Image, source.convert("RGB"))
         except (UnidentifiedImageError, OSError) as exception:
             raise ValueError("AIDE input is not a supported image") from exception
 
