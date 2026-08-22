@@ -13,6 +13,7 @@ const navigation = computed(() =>
     { label: '媒体资产', path: '/assets', permission: 'asset:read' },
     { label: '调查案件', path: '/cases', permission: 'case:read' },
     { label: '取证知识库', path: '/knowledge', permission: 'knowledge:read' },
+    { label: '模型评测', path: '/model-evaluation', permission: 'model:read' },
     { label: 'Agent 任务', path: '/agent-tasks', permission: 'agent:trace:read' },
   ].filter((item) => !item.permission || auth.hasPermission(item.permission)),
 )

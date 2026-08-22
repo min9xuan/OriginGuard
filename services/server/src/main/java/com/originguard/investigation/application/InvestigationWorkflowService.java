@@ -17,6 +17,7 @@ import com.originguard.investigation.infrastructure.InvestigationWorkflowReposit
 import com.originguard.shared.application.BusinessConflictException;
 import com.originguard.shared.application.ResourceNotFoundException;
 import java.util.EnumSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -211,9 +212,11 @@ public class InvestigationWorkflowService {
             UUID taskId,
             long expectedTaskVersion,
             long expectedCaseVersion,
-            ReviewStatus decision,
+            EvidenceConclusion finalConclusion,
             String reason,
-            List<UUID> citedEvidenceIds) {
+            List<UUID> citedEvidenceIds,
+            boolean includeAgentAssessment,
+            UUID agentTaskId) {
         CurrentActor actor = actorProvider.getRequiredActor();
         InvestigationCase current = requireCase(actor.tenantId(), caseId);
         if (current.status() != CaseStatus.WAITING_REVIEW) {
@@ -230,15 +233,17 @@ public class InvestigationWorkflowService {
                 || actor.userId().equals(current.assignedInvestigatorId())) {
             throw new AccessDeniedException("A case cannot be reviewed by its creator or investigator");
         }
-        if (decision == ReviewStatus.PENDING) {
-            throw new BusinessConflictException(
-                    "REVIEW_DECISION_REQUIRED", "Review decision must be APPROVED or REJECTED");
-        }
+        ReviewStatus decision = finalConclusion == EvidenceConclusion.INCONCLUSIVE
+                ? ReviewStatus.REJECTED
+                : ReviewStatus.APPROVED;
         requireDecisionPermission(actor, decision);
         String normalizedReason = reason == null ? "" : reason.trim();
-        if (decision == ReviewStatus.REJECTED && normalizedReason.isBlank()) {
-            throw new BusinessConflictException(
-                    "REVIEW_REASON_REQUIRED", "A rejection reason is required");
+        if (normalizedReason.isBlank()) {
+            normalizedReason = switch (finalConclusion) {
+                case LIKELY_SYNTHETIC -> "人工复核后判定该媒体为 AI 生成内容。";
+                case LIKELY_AUTHENTIC -> "人工复核后判定该媒体为非 AI 生成内容。";
+                case INCONCLUSIVE -> "现有证据不足以形成最终判断，退回补充调查。";
+            };
         }
         List<UUID> normalizedEvidenceIds = citedEvidenceIds == null
                 ? List.of()
@@ -251,6 +256,20 @@ public class InvestigationWorkflowService {
             throw new BusinessConflictException(
                     "REVIEW_EVIDENCE_INVALID", "Cited evidence must belong to the reviewed case");
         }
+        Map<String, Object> agentAssessmentSnapshot = Map.of();
+        UUID includedAgentTaskId = null;
+        if (includeAgentAssessment) {
+            if (agentTaskId == null) {
+                throw new BusinessConflictException(
+                        "REVIEW_AGENT_TASK_REQUIRED", "A completed Agent task must be selected for inclusion");
+            }
+            agentAssessmentSnapshot = workflowRepository
+                    .findCompletedAgentAssessment(actor.tenantId(), caseId, agentTaskId)
+                    .orElseThrow(() -> new BusinessConflictException(
+                            "REVIEW_AGENT_TASK_INVALID",
+                            "The selected Agent assessment must be a completed task for this case"));
+            includedAgentTaskId = agentTaskId;
+        }
         if (!workflowRepository.decideReview(
                 actor.tenantId(),
                 caseId,
@@ -258,7 +277,10 @@ public class InvestigationWorkflowService {
                 actor.userId(),
                 expectedTaskVersion,
                 decision,
-                normalizedReason)) {
+                finalConclusion,
+                normalizedReason,
+                includedAgentTaskId,
+                agentAssessmentSnapshot)) {
             throw new BusinessConflictException(
                     "REVIEW_VERSION_CONFLICT", "The review task changed; reload and retry");
         }
@@ -266,17 +288,23 @@ public class InvestigationWorkflowService {
         CaseStatus target = decision == ReviewStatus.APPROVED ? CaseStatus.CONFIRMED : CaseStatus.REJECTED;
         requireVersion(caseRepository.updateStatus(
                 actor.tenantId(), caseId, expectedCaseVersion, CaseStatus.WAITING_REVIEW, target));
+        Map<String, Object> reviewAuditDetails = new LinkedHashMap<>();
+        reviewAuditDetails.put("reviewTaskId", taskId.toString());
+        reviewAuditDetails.put("decision", decision.name());
+        reviewAuditDetails.put("finalConclusion", finalConclusion.name());
+        reviewAuditDetails.put("reason", normalizedReason);
+        reviewAuditDetails.put("citedEvidenceIds", normalizedEvidenceIds.stream().map(UUID::toString).toList());
+        reviewAuditDetails.put("agentAssessmentIncluded", includeAgentAssessment);
+        if (includedAgentTaskId != null) {
+            reviewAuditDetails.put("agentTaskId", includedAgentTaskId.toString());
+        }
         auditService.record(
                 actor.tenantId(),
                 actor.userId(),
                 decision == ReviewStatus.APPROVED ? "REVIEW_APPROVED" : "REVIEW_REJECTED",
                 InvestigationCaseService.RESOURCE_TYPE,
                 caseId,
-                Map.of(
-                        "reviewTaskId", taskId.toString(),
-                        "decision", decision.name(),
-                        "reason", normalizedReason,
-                        "citedEvidenceIds", normalizedEvidenceIds.stream().map(UUID::toString).toList()));
+                Map.copyOf(reviewAuditDetails));
         auditService.record(
                 actor.tenantId(),
                 actor.userId(),

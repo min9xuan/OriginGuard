@@ -2,6 +2,7 @@ package com.originguard.investigation.domain;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 public record ReviewTask(
@@ -10,7 +11,11 @@ public record ReviewTask(
         UUID caseId,
         UUID reviewerId,
         ReviewStatus status,
+        EvidenceConclusion finalConclusion,
         String decisionReason,
+        boolean agentAssessmentIncluded,
+        UUID agentTaskId,
+        Map<String, Object> agentAssessmentSnapshot,
         UUID createdBy,
         UUID decidedBy,
         List<UUID> citedEvidenceIds,
@@ -19,5 +24,6 @@ public record ReviewTask(
         Instant decidedAt) {
     public ReviewTask {
         citedEvidenceIds = List.copyOf(citedEvidenceIds);
+        agentAssessmentSnapshot = Map.copyOf(agentAssessmentSnapshot);
     }
 }

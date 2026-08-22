@@ -17,7 +17,6 @@ import type {
   EvidenceConclusion,
   EvidenceConfidence,
   MediaAsset,
-  ReviewStatus,
 } from '../types/business'
 import { nextInvestigatorTransition } from '../utils/case-workflow'
 import { formatBytes, formatDate } from '../utils/format'
@@ -31,6 +30,7 @@ import {
   evidenceConclusionLabel,
   evidenceTypeLabel,
   payloadFields,
+  verdictLabel,
 } from '../utils/presentation'
 
 const auth = useAuthStore()
@@ -57,9 +57,10 @@ const evidence = reactive({
   confidence: 'MEDIUM' as EvidenceConfidence,
 })
 const review = reactive({
-  decision: 'APPROVED' as ReviewStatus,
+  finalConclusion: 'LIKELY_SYNTHETIC' as EvidenceConclusion,
   reason: '',
   citedEvidenceIds: [] as string[],
+  includeAgentAssessment: true,
 })
 const previewUrl = ref('')
 const previewName = ref('')
@@ -139,6 +140,11 @@ const currentStageIndex = computed(() => {
 const recentAgentTasks = computed(() => [...caseAgentTasks.value]
   .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
   .slice(0, 5))
+const latestCompletedAgentTask = computed(() => [...caseAgentTasks.value]
+  .filter((task) => task.status === 'COMPLETED')
+  .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())[0] ?? null)
+const selectedAgentVerdict = computed(() => String(latestCompletedAgentTask.value?.conclusion.verdict || 'INCONCLUSIVE'))
+const selectedAgentSummary = computed(() => String(latestCompletedAgentTask.value?.conclusion.summary || '本次 Agent 任务没有生成文字理由。'))
 
 function stageState(index: number) {
   if (index < currentStageIndex.value) return 'completed'
@@ -167,6 +173,15 @@ async function load() {
     workflow.value = workflowResult
     assignees.value = assigneeResult
     caseAgentTasks.value = agentTaskResult.filter((task) => task.caseId === caseId)
+    if (
+      workflowResult.reviewTasks.some((task) => task.status === 'PENDING') &&
+      review.citedEvidenceIds.length === 0
+    ) {
+      review.citedEvidenceIds = workflowResult.evidence.map((item) => item.id)
+    }
+    if (!caseAgentTasks.value.some((task) => task.status === 'COMPLETED')) {
+      review.includeAgentAssessment = false
+    }
   } catch (error) {
     showError(error)
   } finally {
@@ -286,9 +301,11 @@ async function decideReview() {
       caseId,
       pendingReview.value!.id,
       {
-        decision: review.decision,
+        finalConclusion: review.finalConclusion,
         reason: review.reason,
         citedEvidenceIds: review.citedEvidenceIds,
+        includeAgentAssessment: review.includeAgentAssessment,
+        agentTaskId: review.includeAgentAssessment ? latestCompletedAgentTask.value?.id ?? null : null,
         taskVersion: pendingReview.value!.version,
         caseVersion: current.value!.version,
       },
@@ -296,7 +313,7 @@ async function decideReview() {
     )
     review.reason = ''
     review.citedEvidenceIds = []
-    ElMessage.success(review.decision === 'APPROVED' ? '审核已通过' : '案件已驳回')
+    ElMessage.success(review.finalConclusion === 'INCONCLUSIVE' ? '已退回补充调查' : '人工最终判断已提交')
   })
 }
 
@@ -339,6 +356,12 @@ function agentTaskHint(task: AgentTask) {
 
 function evidenceTitle(id: string) {
   return workflow.value.evidence.find((item) => item.id === id)?.title ?? id
+}
+
+function finalConclusionLabel(conclusion: EvidenceConclusion) {
+  if (conclusion === 'LIKELY_SYNTHETIC') return '判定为 AI 生成'
+  if (conclusion === 'LIKELY_AUTHENTIC') return '判定为非 AI 生成'
+  return '证据不足，退回补充调查'
 }
 
 function showError(error: unknown) {
@@ -552,33 +575,59 @@ onBeforeUnmount(() => {
       </section>
 
       <section class="panel review-panel">
-        <div class="section-heading"><div><h2>审核任务</h2><p>提交审核时自动创建，只能由指定审核员决定</p></div></div>
+        <div class="section-heading"><div><h2>人工最终判断</h2><p>选择结论、确认引用依据；Agent 仅提供可选参考，最终裁决始终由审核员负责</p></div></div>
         <div v-if="canReview && pendingReview" class="review-decision">
-          <el-radio-group v-model="review.decision">
-            <el-radio-button value="APPROVED">审核通过</el-radio-button>
-            <el-radio-button value="REJECTED">驳回案件</el-radio-button>
+          <div class="review-step-heading"><span>1</span><div><strong>选择最终结论</strong><small>前两项将确认结案；证据不足会退回调查员补充取证</small></div></div>
+          <el-radio-group v-model="review.finalConclusion" class="verdict-radio-group">
+            <el-radio value="LIKELY_SYNTHETIC" border :disabled="!auth.hasPermission('review:approve')">
+              <strong>判定为 AI 生成</strong><small>现有证据足以支持合成内容判断</small>
+            </el-radio>
+            <el-radio value="LIKELY_AUTHENTIC" border :disabled="!auth.hasPermission('review:approve')">
+              <strong>判定为非 AI 生成</strong><small>现有证据更支持真实或人工制作内容</small>
+            </el-radio>
+            <el-radio value="INCONCLUSIVE" border :disabled="!auth.hasPermission('review:reject')">
+              <strong>证据不足</strong><small>暂不下结论，退回补充调查</small>
+            </el-radio>
           </el-radio-group>
-          <el-input v-model="review.reason" type="textarea" :rows="3" maxlength="2000" placeholder="审核意见；驳回时必填" />
-          <div>
-            <strong>引用本次决定所依据的正式证据</strong>
+          <div class="review-step-heading"><span>2</span><div><strong>选择判断依据</strong><small>正式证据已默认全选，可取消与本次结论无关的条目</small></div></div>
+          <div class="review-evidence-options">
             <el-checkbox-group v-model="review.citedEvidenceIds">
-              <el-checkbox v-for="item in workflow.evidence" :key="item.id" :value="item.id">
-                {{ item.title }}（{{ item.evidenceType }}）
+              <el-checkbox v-for="item in workflow.evidence" :key="item.id" :value="item.id" border>
+                {{ item.title }} · {{ evidenceConclusionLabel(item.conclusion) }}
               </el-checkbox>
             </el-checkbox-group>
           </div>
+          <div class="agent-reference-option" :class="{ unavailable: !latestCompletedAgentTask }">
+            <div>
+              <strong>引用最近一次 Agent 综合初步判断</strong>
+              <small v-if="latestCompletedAgentTask">任务 {{ latestCompletedAgentTask.id.slice(0, 8) }} · {{ formatDate(latestCompletedAgentTask.completedAt || latestCompletedAgentTask.updatedAt) }}</small>
+              <small v-else>当前案件还没有已完成的 Agent 分析</small>
+            </div>
+            <el-switch v-model="review.includeAgentAssessment" :disabled="!latestCompletedAgentTask" />
+          </div>
+          <div v-if="review.includeAgentAssessment && latestCompletedAgentTask" class="agent-reference-preview">
+            <div><span>Agent 初步结论</span><strong>{{ verdictLabel(selectedAgentVerdict) }}</strong></div>
+            <p>{{ selectedAgentSummary }}</p>
+            <el-button text @click="openAgentTask(latestCompletedAgentTask.id)">查看完整分析过程</el-button>
+          </div>
+          <div class="review-step-heading"><span>3</span><div><strong>补充说明（可选）</strong><small>不填写时，系统会根据所选结论生成标准说明</small></div></div>
+          <el-input v-model="review.reason" type="textarea" :rows="3" maxlength="2000" placeholder="只需补充 Agent 与人工判断的差异、特殊风险或后续建议" />
           <el-button
             type="primary"
-            :disabled="!review.citedEvidenceIds.length || (review.decision === 'REJECTED' && !review.reason.trim())"
+            :disabled="!review.citedEvidenceIds.length"
             :loading="saving"
             @click="decideReview"
-          >提交审核决定</el-button>
+          >{{ review.finalConclusion === 'INCONCLUSIVE' ? '退回补充调查' : '提交人工最终判断' }}</el-button>
         </div>
         <ol v-if="workflow.reviewTasks.length" class="review-list">
           <li v-for="task in workflow.reviewTasks" :key="task.id">
             <el-tag :type="task.status === 'APPROVED' ? 'success' : task.status === 'REJECTED' ? 'danger' : 'warning'">{{ task.status }}</el-tag>
             <span>{{ formatDate(task.createdAt) }}</span>
-            <p>{{ task.decisionReason || '等待审核决定' }}</p>
+            <div>
+              <strong v-if="task.finalConclusion">{{ finalConclusionLabel(task.finalConclusion) }}</strong>
+              <p>{{ task.decisionReason || '等待审核决定' }}</p>
+              <small v-if="task.agentAssessmentIncluded">已引用 Agent 初步判断：{{ verdictLabel(String(task.agentAssessmentSnapshot.verdict || 'INCONCLUSIVE')) }}</small>
+            </div>
             <small v-if="task.citedEvidenceIds.length">引用证据：{{ task.citedEvidenceIds.map(evidenceTitle).join('、') }}</small>
           </li>
         </ol>

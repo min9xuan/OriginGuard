@@ -12,7 +12,17 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class AgentPlanValidatorTests {
-    private final AgentPlanValidator validator = new AgentPlanValidator(new SkillRegistry());
+    private final SkillRegistry registry = new SkillRegistry();
+    private final AgentPlanValidator validator = new AgentPlanValidator(registry);
+
+    @Test
+    void loadsSkillPolicyAndInstructionsFromDeclarativeFiles() {
+        assertThat(registry.require(SkillRegistry.MEDIA_TYPE_SKILL, SkillRegistry.SKILL_VERSION).prePlanning()).isTrue();
+        assertThat(registry.require(SkillRegistry.AIGC_DETECTION_SKILL, SkillRegistry.SKILL_VERSION).required()).isTrue();
+        assertThat(registry.require(SkillRegistry.AIGC_DETECTION_SKILL, SkillRegistry.SKILL_VERSION).instructions())
+                .isNotBlank()
+                .contains("AIDE");
+    }
 
     @Test
     void acceptsWhitelistedPlanWithMandatorySkillsAndSufficientBudget() {
@@ -45,6 +55,36 @@ class AgentPlanValidatorTests {
         assertThatThrownBy(() -> validator.validate(plan, 9))
                 .isInstanceOf(BusinessConflictException.class)
                 .hasMessageContaining("duplicate");
+    }
+
+    @Test
+    void rejectsStopBeforeMandatorySkillsHaveCompleted() {
+        AgentPlanner.ReplanDecision decision = new AgentPlanner.ReplanDecision(
+                AgentPlanner.ReplanAction.STOP, "提前停止", List.of(), Map.of());
+
+        assertThatThrownBy(() -> validator.validateDecision(
+                decision,
+                List.of(skill(SkillRegistry.AIGC_DETECTION_SKILL), skill(SkillRegistry.RAG_SKILL)),
+                List.of(SkillRegistry.INTEGRITY_SKILL),
+                5))
+                .isInstanceOf(BusinessConflictException.class)
+                .hasMessageContaining("cannot stop");
+    }
+
+    @Test
+    void acceptsReplanThatDropsOptionalSkillButRetainsUnfinishedMandatorySkills() {
+        List<AgentPlanner.SkillSelection> remaining = List.of(
+                skill(SkillRegistry.METADATA_SKILL),
+                skill(SkillRegistry.AIGC_DETECTION_SKILL),
+                skill(SkillRegistry.RAG_SKILL));
+        AgentPlanner.ReplanDecision decision = new AgentPlanner.ReplanDecision(
+                AgentPlanner.ReplanAction.REPLAN,
+                "观察已足够，删除可选元数据步骤",
+                List.of(skill(SkillRegistry.AIGC_DETECTION_SKILL), skill(SkillRegistry.RAG_SKILL)),
+                Map.of());
+
+        assertThat(validator.validateDecision(
+                decision, remaining, List.of(SkillRegistry.INTEGRITY_SKILL), 5)).isSameAs(decision);
     }
 
     private AgentPlanner.PlannerPlan plan(List<AgentPlanner.SkillSelection> skills) {

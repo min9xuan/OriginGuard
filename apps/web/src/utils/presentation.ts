@@ -40,6 +40,9 @@ const stepLabels: Record<string, { name: string; description: string }> = {
   CONTEXT_ASSEMBLED: { name: '整理案件上下文', description: '汇总案件、媒体和人工审核信息' },
   PLAN_GENERATED: { name: '生成调查方案', description: '多模态模型根据案件内容选择取证能力' },
   PLAN_VALIDATED: { name: '校验调查方案', description: '检查模型方案是否满足权限、预算和必选步骤' },
+  REPLAN_DECIDED: { name: '根据观察决定下一步', description: '规划器读取最新观察，决定继续、调整计划或停止' },
+  REPLAN_FALLBACK: { name: '重规划降级', description: '动态决策异常，Harness 继续执行已校验的安全计划' },
+  REPLAN_LIMIT_REACHED: { name: '达到重规划上限', description: '停止请求动态决策，继续完成当前安全计划' },
   SKILL_SELECTED: { name: '选择取证能力', description: '确定本轮将要执行的 Skill' },
   TOOL_CALLED: { name: '执行取证工具', description: '调用受控工具读取媒体并产生事实结果' },
   KNOWLEDGE_RETRIEVAL_RECORDED: { name: '记录知识依据', description: '保存本次 RAG 检索结果和引用来源' },
@@ -120,6 +123,8 @@ const fieldLabels: Record<string, string> = {
   summary: '摘要',
   remainingStepBudget: '剩余步骤预算',
   checkpointVersion: '检查点版本',
+  replanCount: '动态决策次数',
+  executionMode: '执行模式',
 }
 
 export function caseStatusLabel(status: CaseStatus) {

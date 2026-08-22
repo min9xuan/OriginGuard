@@ -16,6 +16,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -87,9 +88,11 @@ public class InvestigationWorkflowController {
                 taskId,
                 request.taskVersion(),
                 request.caseVersion(),
-                request.decision(),
-                request.reason(),
-                request.citedEvidenceIds()));
+                    request.finalConclusion(),
+                    request.reason(),
+                    request.citedEvidenceIds(),
+                    request.includeAgentAssessment(),
+                    request.agentTaskId()));
     }
 
     public record AssignmentRequest(
@@ -110,9 +113,11 @@ public class InvestigationWorkflowController {
             @Min(0) long version) {}
 
     public record ReviewDecisionRequest(
-            @NotNull ReviewStatus decision,
+            @NotNull EvidenceConclusion finalConclusion,
             @Size(max = 2000) String reason,
             @NotNull @Size(min = 1) List<UUID> citedEvidenceIds,
+            boolean includeAgentAssessment,
+            UUID agentTaskId,
             @Min(0) long taskVersion,
             @Min(0) long caseVersion) {}
 
@@ -158,7 +163,11 @@ public class InvestigationWorkflowController {
             UUID id,
             UUID reviewerId,
             ReviewStatus status,
+            EvidenceConclusion finalConclusion,
             String decisionReason,
+            boolean agentAssessmentIncluded,
+            UUID agentTaskId,
+            Map<String, Object> agentAssessmentSnapshot,
             UUID createdBy,
             UUID decidedBy,
             List<UUID> citedEvidenceIds,
@@ -170,7 +179,11 @@ public class InvestigationWorkflowController {
                     task.id(),
                     task.reviewerId(),
                     task.status(),
+                    task.finalConclusion(),
                     task.decisionReason(),
+                    task.agentAssessmentIncluded(),
+                    task.agentTaskId(),
+                    task.agentAssessmentSnapshot(),
                     task.createdBy(),
                     task.decidedBy(),
                     task.citedEvidenceIds(),

@@ -7,11 +7,15 @@ public record SkillDefinition(
         String code,
         String version,
         String description,
+        String instructions,
         Set<String> requiredPermissions,
         Set<CaseStatus> allowedCaseStatuses,
         Set<String> allowedTools,
-        int maxSteps) {
+        int maxSteps,
+        boolean required,
+        boolean prePlanning) {
     public SkillDefinition {
+        instructions = instructions == null ? "" : instructions.trim();
         requiredPermissions = Set.copyOf(requiredPermissions);
         allowedCaseStatuses = Set.copyOf(allowedCaseStatuses);
         allowedTools = Set.copyOf(allowedTools);

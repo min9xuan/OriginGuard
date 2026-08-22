@@ -97,13 +97,14 @@ class AgentHarnessIntegrationTests {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.task.status").value("COMPLETED"))
                 .andExpect(jsonPath("$.task.selectedSkillCode").value("deterministic_media_rag_pipeline"))
-                .andExpect(jsonPath("$.task.selectedSkillVersion").value("1.3.0"))
+                .andExpect(jsonPath("$.task.selectedSkillVersion").value("1.4.0"))
                 .andExpect(jsonPath("$.task.remainingStepBudget").value(0))
                 .andExpect(jsonPath("$.task.checkpointVersion").value(6))
                 .andExpect(jsonPath("$.task.conclusion.verdict").value("INCONCLUSIVE"))
-                .andExpect(jsonPath("$.steps.length()").value(29))
+                .andExpect(jsonPath("$.steps.length()").value(34))
                 .andExpect(jsonPath("$.steps[*].stepType", hasItem("PLAN_GENERATED")))
                 .andExpect(jsonPath("$.steps[*].stepType", hasItem("PLAN_VALIDATED")))
+                .andExpect(jsonPath("$.steps[*].stepType", hasItem("REPLAN_DECIDED")))
                 .andExpect(jsonPath("$.steps[5].output.provider").value("FAKE"))
                 .andExpect(jsonPath("$.steps[5].output.selectedSkills.length()").value(5))
                 .andExpect(jsonPath("$.steps[5].output.selectedSkills[0].reason").isNotEmpty())
@@ -171,7 +172,7 @@ class AgentHarnessIntegrationTests {
                         .header("Authorization", bearer(reviewer)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.task.status").value("COMPLETED"))
-                .andExpect(jsonPath("$.steps.length()").value(29));
+                .andExpect(jsonPath("$.steps.length()").value(34));
 
         mockMvc.perform(get("/api/v1/cases/{id}/audit", caseId)
                         .header("Authorization", bearer(reviewer)))

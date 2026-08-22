@@ -17,6 +17,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -28,7 +30,7 @@ public class OpenAlexAcademicMetadataClient {
             Map.entry("ICCV", new Venue("ICCV", "IEEE/CVF International Conference on Computer Vision",
                     List.of("international conference on computer vision"))),
             Map.entry("ECCV", new Venue("ECCV", "European Conference on Computer Vision",
-                    List.of("european conference on computer vision"))),
+                    List.of("european conference on computer vision", "eccv"))),
             Map.entry("ICLR", new Venue("ICLR", "International Conference on Learning Representations",
                     List.of("international conference on learning representations"))),
             Map.entry("NEURIPS", new Venue("NEURIPS", "Neural Information Processing Systems",
@@ -53,6 +55,7 @@ public class OpenAlexAcademicMetadataClient {
     private final String baseUrl;
     private final String apiKey;
     private final Duration timeout;
+    private final Map<String, List<String>> sourceIdsByVenue = new ConcurrentHashMap<>();
 
     public OpenAlexAcademicMetadataClient(
             @Value("${originguard.knowledge-expansion.openalex-base-url:https://api.openalex.org}") String baseUrl,
@@ -90,34 +93,40 @@ public class OpenAlexAcademicMetadataClient {
 
     private List<ExternalKnowledgeCandidate> searchVenue(
             String query, Venue venue, int fromYear, int toYear, int limit) {
-        String filter = "from_publication_date:" + fromYear + "-01-01,to_publication_date:"
+        List<String> sourceIds = sourceIdsByVenue.computeIfAbsent(venue.code(), ignored -> resolveSourceIds(venue));
+        String dateFilter = "from_publication_date:" + fromYear + "-01-01,to_publication_date:"
                 + toYear + "-12-31,has_abstract:true";
+        Map<String, ExternalKnowledgeCandidate> candidates = new LinkedHashMap<>();
+        if (!sourceIds.isEmpty()) {
+            fetchCandidates(
+                    query,
+                    dateFilter + ",locations.source.id:" + String.join("|", sourceIds),
+                    venue,
+                    Set.copyOf(sourceIds),
+                    Math.min(100, Math.max(10, limit * 3)))
+                    .forEach(candidate -> candidates.putIfAbsent(candidate.sourceIdentifier(), candidate));
+        }
+        // OpenAlex often leaves source.id empty for conference proceedings and only exposes
+        // raw_source_name. Use a larger venue-keyword candidate pool as a compatibility fallback.
+        fetchCandidates(query + " " + venue.code(), dateFilter, venue, Set.copyOf(sourceIds), 100)
+                .forEach(candidate -> candidates.putIfAbsent(candidate.sourceIdentifier(), candidate));
+        return candidates.values().stream().limit(limit).toList();
+    }
+
+    private List<ExternalKnowledgeCandidate> fetchCandidates(
+            String query, String filter, Venue venue, Set<String> sourceIds, int perPage) {
         StringBuilder url = new StringBuilder(baseUrl).append("/works?search=")
-                .append(encode(query + " " + venue.code()))
+                .append(encode(query))
                 .append("&filter=").append(encode(filter))
-                .append("&per_page=").append(Math.min(100, Math.max(10, limit * 3)));
+                .append("&per_page=").append(perPage);
         if (!apiKey.isBlank()) url.append("&api_key=").append(encode(apiKey));
         try {
-            HttpRequest request = HttpRequest.newBuilder(URI.create(url.toString()))
-                    .timeout(timeout)
-                    .header("Accept", "application/json")
-                    .header("User-Agent", "OriginGuard-RAG-Knowledge-Expansion/1.0")
-                    .GET().build();
-            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-            if (response.statusCode() == 429) {
-                throw new ExternalKnowledgeSourceUnavailableException(
-                        "RAG_KNOWLEDGE_SOURCE_RATE_LIMITED",
-                        "OpenAlex 匿名检索当前限流，请稍后重试或配置免费的 OPENALEX_API_KEY");
-            }
-            if (response.statusCode() != 200) {
-                throw new ExternalKnowledgeSourceUnavailableException(
-                        "RAG_KNOWLEDGE_SOURCE_UNAVAILABLE",
-                        "OpenAlex 知识来源暂不可用，HTTP " + response.statusCode());
-            }
-            JsonNode results = objectMapper.readTree(response.body()).path("results");
+            HttpResponse<String> response = send(url.toString());
+            requireSuccessful(response);
+            JsonNode results = readPayload(response.body()).path("results");
             List<ExternalKnowledgeCandidate> candidates = new ArrayList<>();
             for (JsonNode work : results) {
-                ExternalKnowledgeCandidate candidate = toCandidate(work, venue);
+                ExternalKnowledgeCandidate candidate = toCandidate(work, venue, sourceIds);
                 if (candidate != null) candidates.add(candidate);
             }
             return candidates;
@@ -131,9 +140,37 @@ public class OpenAlexAcademicMetadataClient {
         }
     }
 
-    private ExternalKnowledgeCandidate toCandidate(JsonNode work, Venue expectedVenue) {
-        String sourceName = work.path("primary_location").path("source").path("display_name").asText();
-        if (!expectedVenue.matches(sourceName)) return null;
+    private List<String> resolveSourceIds(Venue venue) {
+        StringBuilder url = new StringBuilder(baseUrl).append("/sources?search=")
+                .append(encode(venue.name()))
+                .append("&per_page=25");
+        if (!apiKey.isBlank()) url.append("&api_key=").append(encode(apiKey));
+        try {
+            HttpResponse<String> response = send(url.toString());
+            requireSuccessful(response);
+            List<String> sourceIds = new ArrayList<>();
+            for (JsonNode source : readPayload(response.body()).path("results")) {
+                String id = source.path("id").asText().trim();
+                String displayName = source.path("display_name").asText();
+                if (!id.isBlank() && venue.matches(displayName)) sourceIds.add(shortOpenAlexId(id));
+            }
+            return sourceIds.stream().distinct().toList();
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new ExternalKnowledgeSourceUnavailableException(
+                    "RAG_KNOWLEDGE_SOURCE_UNAVAILABLE", "OpenAlex 来源解析被中断", exception);
+        } catch (IOException exception) {
+            throw new ExternalKnowledgeSourceUnavailableException(
+                    "RAG_KNOWLEDGE_SOURCE_UNAVAILABLE", "OpenAlex 来源解析暂不可用", exception);
+        }
+    }
+
+    private ExternalKnowledgeCandidate toCandidate(
+            JsonNode work, Venue expectedVenue, Set<String> expectedSourceIds) {
+        JsonNode matchedLocation = findVenueLocation(work, expectedSourceIds, expectedVenue);
+        if (matchedLocation == null) return null;
+        String sourceName = locationSourceName(matchedLocation);
+        if (sourceName.isBlank()) sourceName = expectedVenue.name();
         String identifier = work.path("id").asText();
         String title = work.path("title").asText().trim();
         String abstractText = reconstructAbstract(work.path("abstract_inverted_index"));
@@ -145,12 +182,72 @@ public class OpenAlexAcademicMetadataClient {
             if (!name.isBlank() && authors.size() < 20) authors.add(name);
         });
         String doi = work.path("doi").asText("");
-        String sourceUrl = work.path("primary_location").path("landing_page_url").asText("");
+        String sourceUrl = matchedLocation.path("landing_page_url").asText("");
+        if (sourceUrl.isBlank()) {
+            sourceUrl = work.path("primary_location").path("landing_page_url").asText("");
+        }
         if (sourceUrl.isBlank()) sourceUrl = doi.isBlank() ? identifier : doi;
         return new ExternalKnowledgeCandidate(
                 "OPENALEX", identifier, title, abstractText, List.copyOf(authors),
                 expectedVenue.code(), sourceName, year, doi, sourceUrl,
                 work.path("cited_by_count").asInt(0));
+    }
+
+    private JsonNode findVenueLocation(JsonNode work, Set<String> expectedSourceIds, Venue expectedVenue) {
+        JsonNode primary = work.path("primary_location");
+        if (matchesVenueLocation(primary, expectedSourceIds, expectedVenue)) {
+            return primary;
+        }
+        for (JsonNode location : work.path("locations")) {
+            if (matchesVenueLocation(location, expectedSourceIds, expectedVenue)) return location;
+        }
+        return null;
+    }
+
+    private boolean matchesVenueLocation(JsonNode location, Set<String> expectedSourceIds, Venue expectedVenue) {
+        String sourceId = shortOpenAlexId(location.path("source").path("id").asText());
+        if (!sourceId.isBlank() && expectedSourceIds.contains(sourceId)) return true;
+        return expectedVenue.matches(locationSourceName(location));
+    }
+
+    private String locationSourceName(JsonNode location) {
+        String displayName = location.path("source").path("display_name").asText().trim();
+        return displayName.isBlank() ? location.path("raw_source_name").asText().trim() : displayName;
+    }
+
+    private HttpResponse<String> send(String url) throws IOException, InterruptedException {
+        HttpRequest request = HttpRequest.newBuilder(URI.create(url))
+                .timeout(timeout)
+                .header("Accept", "application/json")
+                .header("User-Agent", "OriginGuard-RAG-Knowledge-Expansion/1.0")
+                .GET().build();
+        return client.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    private void requireSuccessful(HttpResponse<String> response) {
+        if (response.statusCode() == 429) {
+            throw new ExternalKnowledgeSourceUnavailableException(
+                    "RAG_KNOWLEDGE_SOURCE_RATE_LIMITED",
+                    "OpenAlex 匿名检索当前限流，请稍后重试或配置免费的 OPENALEX_API_KEY");
+        }
+        if (response.statusCode() != 200) {
+            throw new ExternalKnowledgeSourceUnavailableException(
+                    "RAG_KNOWLEDGE_SOURCE_UNAVAILABLE",
+                    "OpenAlex 知识来源暂不可用，HTTP " + response.statusCode());
+        }
+    }
+
+    private JsonNode readPayload(String body) throws IOException {
+        JsonNode payload = objectMapper.readTree(body);
+        for (int depth = 0; depth < 2 && payload.isTextual(); depth++) {
+            payload = objectMapper.readTree(payload.asText());
+        }
+        return payload;
+    }
+
+    private String shortOpenAlexId(String id) {
+        int separator = id.lastIndexOf('/');
+        return separator >= 0 ? id.substring(separator + 1) : id;
     }
 
     private String reconstructAbstract(JsonNode invertedIndex) {

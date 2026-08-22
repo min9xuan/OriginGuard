@@ -10,7 +10,6 @@ import type {
   EvidenceConfidence,
   InvestigationEvidence,
   InvestigationCase,
-  ReviewStatus,
 } from '../types/business'
 import { apiRequest } from './http'
 
@@ -107,9 +106,11 @@ export const caseApi = {
     caseId: string,
     taskId: string,
     request: {
-      decision: ReviewStatus
+      finalConclusion: EvidenceConclusion
       reason: string
       citedEvidenceIds: string[]
+      includeAgentAssessment: boolean
+      agentTaskId: string | null
       taskVersion: number
       caseVersion: number
     },

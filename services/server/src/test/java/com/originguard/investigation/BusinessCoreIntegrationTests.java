@@ -269,22 +269,17 @@ class BusinessCoreIntegrationTests {
         mockMvc.perform(post("/api/v1/cases/{caseId}/reviews/{taskId}/decision", caseId, taskId)
                         .header("Authorization", bearer(admin))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(reviewJson("APPROVED", "", evidenceId, 0, 5)))
+                        .content(reviewJson("LIKELY_AUTHENTIC", "", evidenceId, 0, 5)))
                 .andExpect(status().isForbidden());
 
         mockMvc.perform(post("/api/v1/cases/{caseId}/reviews/{taskId}/decision", caseId, taskId)
                         .header("Authorization", bearer(reviewer))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(reviewJson("REJECTED", "", evidenceId, 0, 5)))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.code").value("REVIEW_REASON_REQUIRED"));
-
-        mockMvc.perform(post("/api/v1/cases/{caseId}/reviews/{taskId}/decision", caseId, taskId)
-                        .header("Authorization", bearer(reviewer))
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(reviewJson("APPROVED", "人工复核同意该判断", evidenceId, 0, 5)))
+                        .content(reviewJson("LIKELY_AUTHENTIC", "人工复核同意该判断", evidenceId, 0, 5)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.reviewTasks[0].status").value("APPROVED"))
+                .andExpect(jsonPath("$.reviewTasks[0].finalConclusion").value("LIKELY_AUTHENTIC"))
+                .andExpect(jsonPath("$.reviewTasks[0].agentAssessmentIncluded").value(false))
                 .andExpect(jsonPath("$.reviewTasks[0].citedEvidenceIds[0]").value(evidenceId));
 
         mockMvc.perform(get("/api/v1/cases/{id}", caseId).header("Authorization", bearer(reviewer)))
@@ -385,10 +380,10 @@ class BusinessCoreIntegrationTests {
     }
 
     private String reviewJson(
-            String decision, String reason, String evidenceId, int taskVersion, int caseVersion) {
+            String finalConclusion, String reason, String evidenceId, int taskVersion, int caseVersion) {
         return """
-                {"decision":"%s","reason":"%s","citedEvidenceIds":["%s"],"taskVersion":%d,"caseVersion":%d}
-                """.formatted(decision, reason, evidenceId, taskVersion, caseVersion);
+                {"finalConclusion":"%s","reason":"%s","citedEvidenceIds":["%s"],"includeAgentAssessment":false,"agentTaskId":null,"taskVersion":%d,"caseVersion":%d}
+                """.formatted(finalConclusion, reason, evidenceId, taskVersion, caseVersion);
     }
 
     private UUID userId(String username) {

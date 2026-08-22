@@ -66,6 +66,14 @@ class ModelApiAigcDetectionToolTests {
                     org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
                     org.mockito.ArgumentMatchers.any()))
                     .thenReturn(Map.of("source", "DETERMINISTIC_TEMPLATE", "summary", "测试解释"));
+            when(explainer.synthesize(
+                    org.mockito.ArgumentMatchers.anyList(), org.mockito.ArgumentMatchers.anyString()))
+                    .thenReturn(Map.of(
+                            "source", "DETERMINISTIC_TEMPLATE",
+                            "verdict", "LIKELY_SYNTHETIC",
+                            "confidence", "HIGH",
+                            "summary", "Agent 初步倾向 AI 生成",
+                            "humanReviewRequired", true));
             ModelApiAigcDetectionTool tool = new ModelApiAigcDetectionTool(
                     media, artifacts, explainer, new AigcEvidenceFusion(),
                     "http://127.0.0.1:" + server.getAddress().getPort(), Duration.ofSeconds(5));
@@ -114,8 +122,8 @@ class ModelApiAigcDetectionToolTests {
                   "syntheticProbability":0.91,
                   "authenticProbability":0.09,
                   "classification":"LIKELY_SYNTHETIC",
-                  "syntheticThreshold":0.8,
-                  "authenticThreshold":0.2,
+                  "syntheticThreshold":0.5,
+                  "authenticThreshold":0.5,
                   "width":64,
                   "height":64,
                   "processingMilliseconds":10,

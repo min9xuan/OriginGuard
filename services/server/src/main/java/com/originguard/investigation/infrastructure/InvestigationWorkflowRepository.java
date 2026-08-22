@@ -11,6 +11,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -258,11 +259,19 @@ public class InvestigationWorkflowRepository {
             UUID reviewerId,
             long expectedVersion,
             ReviewStatus decision,
-            String reason) {
+            EvidenceConclusion finalConclusion,
+            String reason,
+            UUID agentTaskId,
+            Map<String, Object> agentAssessmentSnapshot) {
+        boolean includeAgentAssessment = agentTaskId != null;
         int updated = jdbcClient.sql("""
                         UPDATE review_task
                         SET status = :decision,
+                            final_conclusion = :finalConclusion,
                             decision_reason = :reason,
+                            agent_assessment_included = :includeAgentAssessment,
+                            agent_task_id = :agentTaskId,
+                            agent_assessment_snapshot = CAST(:agentAssessmentSnapshot AS jsonb),
                             decided_by = :reviewerId,
                             decided_at = CURRENT_TIMESTAMP,
                             version = version + 1
@@ -274,7 +283,11 @@ public class InvestigationWorkflowRepository {
                           AND version = :expectedVersion
                         """)
                 .param("decision", decision.name())
+                .param("finalConclusion", finalConclusion.name())
                 .param("reason", reason)
+                .param("includeAgentAssessment", includeAgentAssessment)
+                .param("agentTaskId", agentTaskId)
+                .param("agentAssessmentSnapshot", writeJson(agentAssessmentSnapshot))
                 .param("reviewerId", reviewerId)
                 .param("tenantId", tenantId)
                 .param("caseId", caseId)
@@ -282,6 +295,31 @@ public class InvestigationWorkflowRepository {
                 .param("expectedVersion", expectedVersion)
                 .update();
         return updated == 1;
+    }
+
+    public Optional<Map<String, Object>> findCompletedAgentAssessment(
+            UUID tenantId, UUID caseId, UUID agentTaskId) {
+        return jdbcClient.sql("""
+                        SELECT conclusion::text
+                        FROM agent_task
+                        WHERE tenant_id = :tenantId
+                          AND case_id = :caseId
+                          AND id = :agentTaskId
+                          AND status = 'COMPLETED'
+                          AND conclusion IS NOT NULL
+                        """)
+                .param("tenantId", tenantId)
+                .param("caseId", caseId)
+                .param("agentTaskId", agentTaskId)
+                .query(String.class)
+                .optional()
+                .map(json -> {
+                    try {
+                        return readJson(json);
+                    } catch (SQLException exception) {
+                        throw new IllegalStateException(exception);
+                    }
+                });
     }
 
     public boolean evidenceBelongsToCase(UUID tenantId, UUID caseId, List<UUID> evidenceIds) {
@@ -347,7 +385,13 @@ public class InvestigationWorkflowRepository {
                 rs.getObject("case_id", UUID.class),
                 rs.getObject("reviewer_id", UUID.class),
                 ReviewStatus.valueOf(rs.getString("status")),
+                rs.getString("final_conclusion") == null
+                        ? null
+                        : EvidenceConclusion.valueOf(rs.getString("final_conclusion")),
                 rs.getString("decision_reason"),
+                rs.getBoolean("agent_assessment_included"),
+                rs.getObject("agent_task_id", UUID.class),
+                readJson(rs.getString("agent_assessment_snapshot")),
                 rs.getObject("created_by", UUID.class),
                 rs.getObject("decided_by", UUID.class),
                 java.util.Arrays.asList((UUID[]) rs.getArray("cited_evidence_ids").getArray()),
@@ -363,7 +407,9 @@ public class InvestigationWorkflowRepository {
             """;
 
     private static final String REVIEW_SELECT = """
-            SELECT r.id, r.tenant_id, r.case_id, r.reviewer_id, r.status, r.decision_reason,
+           SELECT r.id, r.tenant_id, r.case_id, r.reviewer_id, r.status, r.final_conclusion,
+                  r.decision_reason, r.agent_assessment_included, r.agent_task_id,
+                  r.agent_assessment_snapshot::text AS agent_assessment_snapshot,
                    r.created_by, r.decided_by, r.version, r.created_at, r.decided_at,
                    ARRAY(
                        SELECT ref.evidence_id
@@ -379,6 +425,14 @@ public class InvestigationWorkflowRepository {
             return objectMapper.readValue(json, new TypeReference<>() {});
         } catch (JacksonException exception) {
             throw new SQLException("Invalid observation payload", exception);
+        }
+    }
+
+    private String writeJson(Map<String, Object> value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (JacksonException exception) {
+            throw new IllegalArgumentException("Unable to serialize Agent assessment snapshot", exception);
         }
     }
 }

@@ -94,6 +94,7 @@ public class ModelApiAigcDetectionTool implements AgentTool {
             finding.put("fusion", fusion);
             Map<String, Object> explanationInput = new LinkedHashMap<>(detection);
             explanationInput.put("mediaTypeContext", mediaTypeContext);
+            explanationInput.put("fusion", fusion);
             finding.put("explanation", resultExplainer.explain(
                     asset.originalFilename(), stored.content(), attentionOverlay, explanationInput));
             findings.add(Map.copyOf(finding));
@@ -102,16 +103,20 @@ public class ModelApiAigcDetectionTool implements AgentTool {
             throw new IllegalStateException("AIDE requires at least one linked image asset");
         }
         Map<String, Object> first = findings.getFirst();
+        String overallClassification = aggregateClassification(findings);
+        String deterministicVerdict = aggregateVerdict(findings);
+        Map<String, Object> agentAssessment = resultExplainer.synthesize(findings, deterministicVerdict);
         Map<String, Object> output = new LinkedHashMap<>();
         output.put("provider", first.get("provider"));
-        output.put("toolVersion", "3.0.0");
+        output.put("toolVersion", "4.0.0");
         output.put("model", first.get("model"));
         output.put("modelVersion", first.get("modelVersion"));
         output.put("checkpointSha256", first.get("checkpointSha256"));
         output.put("device", first.get("device"));
         output.put("analyzedImageCount", findings.size());
-        output.put("overallClassification", aggregateClassification(findings));
-        output.put("overallVerdict", aggregateVerdict(findings));
+        output.put("overallClassification", overallClassification);
+        output.put("overallVerdict", agentAssessment.getOrDefault("verdict", deterministicVerdict));
+        output.put("agentAssessment", agentAssessment);
         output.put("maximumSyntheticProbability", findings.stream()
                 .map(finding -> finding.get("syntheticProbability"))
                 .filter(Number.class::isInstance)

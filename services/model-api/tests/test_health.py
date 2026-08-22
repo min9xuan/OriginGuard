@@ -44,8 +44,8 @@ class FakeAideDetector:
             syntheticProbability=0.91,
             authenticProbability=0.09,
             classification="LIKELY_SYNTHETIC",
-            syntheticThreshold=0.8,
-            authenticThreshold=0.2,
+            syntheticThreshold=0.5,
+            authenticThreshold=0.5,
             width=32,
             height=32,
             processingMilliseconds=12,
@@ -142,6 +142,13 @@ def test_quality_gate_rejects_tiny_image_without_loading_aide() -> None:
     assert result.syntheticProbability is None
     assert result.qualityAssessment.status == "REJECT"
     assert detector.loaded is False
+
+
+def test_aide_uses_official_half_score_as_preliminary_boundary() -> None:
+    detector = LocalAideDetector(Path.cwd(), Path.cwd() / ".runtime-does-not-exist")
+
+    assert detector._classify(0.499999) == "LIKELY_AUTHENTIC"
+    assert detector._classify(0.5) == "LIKELY_SYNTHETIC"
 
 
 def test_clip_media_type_contract_without_loading_model() -> None:

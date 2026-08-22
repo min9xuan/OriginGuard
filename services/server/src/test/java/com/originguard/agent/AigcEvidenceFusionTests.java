@@ -10,45 +10,49 @@ class AigcEvidenceFusionTests {
     private final AigcEvidenceFusion fusion = new AigcEvidenceFusion();
 
     @Test
-    void refusesDirectionalConclusionWithoutMediaTypeContext() {
+    void keepsAidePreliminaryConclusionWithoutMediaTypeContext() {
         Map<String, Object> result = fusion.fuse(
-                primary("LIKELY_SYNTHETIC"),
+                primary("LIKELY_SYNTHETIC", 0.91),
                 Map.of("status", "NOT_CONFIGURED", "classification", "INCONCLUSIVE"),
                 quality("PASS"));
 
-        assertThat(result).containsEntry("verdict", "INCONCLUSIVE");
-        assertThat(result).containsEntry("agreement", "MEDIA_TYPE_UNAVAILABLE");
-        assertThat(result).containsEntry("decisionReady", false);
+        assertThat(result).containsEntry("verdict", "LIKELY_SYNTHETIC");
+        assertThat(result).containsEntry("agreement", "PRELIMINARY_WITHOUT_TYPE_CONTEXT");
+        assertThat(result).containsEntry("decisionReady", true);
+        assertThat(result).containsEntry("humanReviewRequired", true);
     }
 
     @Test
-    void requiresDomainCalibrationForCartoon() {
+    void routesCartoonWithoutDiscardingAidePreliminaryConclusion() {
         Map<String, Object> result = fusion.fuse(
-                primary("LIKELY_SYNTHETIC"),
+                primary("LIKELY_SYNTHETIC", 0.91),
                 mediaType("ILLUSTRATION_CARTOON", "插画或卡通"),
                 quality("PASS"));
 
-        assertThat(result).containsEntry("verdict", "INCONCLUSIVE");
-        assertThat(result).containsEntry("agreement", "DOMAIN_CALIBRATION_REQUIRED");
+        assertThat(result).containsEntry("verdict", "LIKELY_SYNTHETIC");
+        assertThat(result).containsEntry("agreement", "PRELIMINARY_WITH_TYPE_CONTEXT");
+        assertThat(result).containsEntry("decisionReady", true);
+        assertThat(result).containsEntry("recommendedDomainDetector", "CARTOON_AIGC_DETECTOR");
+        assertThat(result.get("limitations").toString()).contains("专用 AIGC 检测模型");
     }
 
     @Test
     void appliesPhotographContextWithoutClaimingIndependentValidation() {
         Map<String, Object> result = fusion.fuse(
-                primary("LIKELY_AUTHENTIC"),
+                primary("LIKELY_AUTHENTIC", 0.09),
                 mediaType("PHOTOGRAPH", "摄影图像"),
                 quality("PASS"));
 
         assertThat(result).containsEntry("verdict", "LIKELY_AUTHENTIC");
-        assertThat(result).containsEntry("confidence", "LOW");
-        assertThat(result).containsEntry("agreement", "TYPE_CONTEXT_APPLIED");
-        assertThat(result).containsEntry("decisionReady", false);
+        assertThat(result).containsEntry("confidence", "HIGH");
+        assertThat(result).containsEntry("agreement", "PRELIMINARY_WITH_TYPE_CONTEXT");
+        assertThat(result).containsEntry("decisionReady", true);
     }
 
     @Test
     void mediaTypeDoesNotOverrideInconclusiveAide() {
         Map<String, Object> result = fusion.fuse(
-                primary("INCONCLUSIVE"),
+                primary("INCONCLUSIVE", 0.5),
                 mediaType("PHOTOGRAPH", "摄影图像"),
                 quality("PASS"));
 
@@ -61,7 +65,7 @@ class AigcEvidenceFusionTests {
     @Test
     void explainsThatDirectionalClipCannotReplaceInconclusiveAide() {
         Map<String, Object> result = fusion.fuse(
-                primary("INCONCLUSIVE"),
+                primary("INCONCLUSIVE", 0.5),
                 mediaType("ILLUSTRATION_CARTOON", "插画或卡通"),
                 quality("PASS"));
 
@@ -74,7 +78,7 @@ class AigcEvidenceFusionTests {
     @Test
     void rejectsUnsupportedImageBeforeModelFusion() {
         Map<String, Object> result = fusion.fuse(
-                primary("UNSUPPORTED_INPUT"),
+                primary("UNSUPPORTED_INPUT", 0.0),
                 Map.of("status", "SKIPPED", "classification", "INCONCLUSIVE"),
                 quality("REJECT"));
 
@@ -82,8 +86,12 @@ class AigcEvidenceFusionTests {
         assertThat(result).containsEntry("confidence", "UNAVAILABLE");
     }
 
-    private Map<String, Object> primary(String classification) {
-        return Map.of("classification", classification);
+    private Map<String, Object> primary(String classification, double syntheticProbability) {
+        return Map.of(
+                "classification", classification,
+                "syntheticProbability", syntheticProbability,
+                "syntheticThreshold", 0.5,
+                "authenticThreshold", 0.5);
     }
 
     private Map<String, Object> quality(String status) {

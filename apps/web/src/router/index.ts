@@ -39,6 +39,11 @@ const router = createRouter({
           meta: { permissions: ['knowledge:read'] },
         },
         {
+          path: 'model-evaluation',
+          component: () => import('../views/DetectionEvaluationView.vue'),
+          meta: { permissions: ['model:read'] },
+        },
+        {
           path: 'agent-tasks',
           component: () => import('../views/AgentTasksView.vue'),
           meta: { permissions: ['agent:trace:read'] },

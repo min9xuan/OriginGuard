@@ -52,6 +52,7 @@ originguard:
     openalex-api-key: ${OPENALEX_API_KEY:}
     timeout: ${RAG_KNOWLEDGE_EXPANSION_TIMEOUT:PT20S}
   agent:
+    max-replans: ${AGENT_MAX_REPLANS:6}
     aigc-detector:
       provider: ${AIGC_DETECTOR_PROVIDER:model-api}
       base-url: ${MODEL_API_BASE_URL:http://127.0.0.1:8090}

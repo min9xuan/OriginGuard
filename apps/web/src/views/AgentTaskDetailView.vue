@@ -57,12 +57,20 @@ const plannerSkills = computed(() => {
     }]
   })
 })
+const replanSteps = computed(() => details.value?.steps.filter((step) =>
+  ['REPLAN_DECIDED', 'REPLAN_FALLBACK'].includes(step.stepType),
+) ?? [])
 const conclusionVerdict = computed(() => verdictLabel(String(details.value?.task.conclusion.verdict || '尚未生成')))
 const conclusionSummary = computed(() => localizeSystemText(String(details.value?.task.conclusion.summary || '')))
+const conclusionConfidence = computed(() => confidenceLabel(details.value?.task.conclusion.confidence))
+const conclusionSource = computed(() => details.value?.task.conclusion.synthesisSource === 'LOCAL_QWEN3_VL'
+  ? '本地 Qwen 综合研判'
+  : '确定性降级研判')
 const conclusionLimitations = computed(() => {
   const value = details.value?.task.conclusion.limitations
   return Array.isArray(value) ? value.map((item) => localizeSystemText(String(item))) : []
 })
+const conclusionMissingEvidence = computed(() => textItems(details.value?.task.conclusion.missingEvidence))
 const citationCount = computed(() => details.value?.knowledgeRetrievals.reduce(
   (total, retrieval) => total + retrieval.citations.length,
   0,
@@ -77,7 +85,7 @@ const investigationPhases = computed(() => {
   const phases = [
     { label: '读取案件', description: '整理案件与媒体上下文', done: steps.has('CONTEXT_ASSEMBLED') },
     { label: '识别类型并制定方案', description: 'CLIP 提供媒体类型，模型据此选择受控取证能力', done: steps.has('PLAN_VALIDATED') },
-    { label: '执行取证', description: '工具产生观察与知识依据', done: steps.has('CONCLUSION_SYNTHESIZED') },
+    { label: '观察并动态调整', description: '工具产生观察，规划器据此继续、重规划或停止', done: steps.has('CONCLUSION_SYNTHESIZED') },
     { label: '提交人工核验', description: '候选观察已交给调查员，尚未成为正式证据', done: details.value?.task.status === 'COMPLETED' },
   ]
   const firstPending = phases.findIndex((phase) => !phase.done)
@@ -149,7 +157,7 @@ function mediaTypeLabel(detection: Record<string, unknown>) {
 }
 
 function confidenceLabel(value: unknown) {
-  return ({ MEDIUM: '中等', LOW: '较低', UNAVAILABLE: '不可用' } as Record<string, string>)[String(value)] || String(value || '未知')
+  return ({ HIGH: '较高', MEDIUM: '中等', LOW: '较低', UNAVAILABLE: '不可用' } as Record<string, string>)[String(value)] || String(value || '未知')
 }
 
 function textItems(value: unknown) {
@@ -225,6 +233,11 @@ function stepSummary(step: AgentStep) {
   }
   if (step.stepType === 'PLAN_GENERATED') return String(output.summary || '调查方案已经生成')
   if (step.stepType === 'PLAN_VALIDATED') return `方案包含 ${output.selectedSkillCount ?? plannerSkills.value.length} 项取证能力，已通过安全策略校验`
+  if (step.stepType === 'REPLAN_DECIDED' || step.stepType === 'REPLAN_FALLBACK') {
+    const labels: Record<string, string> = { CONTINUE: '继续原计划', REPLAN: '调整剩余计划', STOP: '停止调用工具并汇总' }
+    return `${labels[String(output.action)] || '已完成动态决策'}：${String(output.summary || '未提供说明')}`
+  }
+  if (step.stepType === 'REPLAN_LIMIT_REACHED') return '动态决策次数已达到安全上限，Harness 将完成当前已校验计划'
   if (step.stepType === 'SKILL_SELECTED') return String(output.reason || `选择“${skillMeta(step.skillCode).name}”`)
   if (step.stepType === 'TOOL_CALLED') return `${skillMeta(step.skillCode).name}执行完成，结果已交给 Harness 处理`
   if (step.stepType === 'KNOWLEDGE_RETRIEVAL_RECORDED') return `已保存 ${output.citationCount ?? 0} 条可追溯知识引用`
@@ -305,19 +318,28 @@ onBeforeUnmount(releaseVisualizations)
 
       <section class="metric-grid agent-metrics readable-metrics">
         <article class="panel accent-panel"><span>调查规划器</span><strong>{{ plannerName }}</strong></article>
-        <article class="panel"><span>计划执行</span><strong>{{ plannerSkills.length }} 项能力</strong></article>
+        <article class="panel"><span>动态决策</span><strong>{{ replanSteps.length }} 次</strong></article>
         <article class="panel"><span>候选观察</span><strong>{{ details.observations.length }} 条</strong></article>
         <article class="panel"><span>知识引用</span><strong>{{ citationCount }} 条</strong></article>
       </section>
 
       <section v-if="Object.keys(details.task.conclusion).length" class="panel agent-conclusion result-panel">
         <div class="section-heading">
-          <div><h2>Agent 阶段性结论</h2><p>这是自动取证结果摘要，不是审核员的最终裁决。</p></div>
+          <div><h2>Agent 综合初步判断</h2><p>AIDE 提供检测方向，CLIP 负责类型路由，LLM 综合现有证据；审核员仍负责最终裁决。</p></div>
           <span class="result-badge">{{ conclusionVerdict }}</span>
         </div>
+        <div class="agent-assessment-meta">
+          <span>{{ conclusionSource }}</span>
+          <span>{{ conclusionConfidence }}</span>
+          <span>需要人工复核</span>
+        </div>
         <p class="conclusion-summary">{{ conclusionSummary || '本次任务没有生成文字结论。' }}</p>
+        <div v-if="conclusionMissingEvidence.length" class="conclusion-limitations">
+          <strong>尚待补充的专用能力</strong>
+          <ul><li v-for="item in conclusionMissingEvidence" :key="item">{{ item }}</li></ul>
+        </div>
         <div v-if="conclusionLimitations.length" class="conclusion-limitations">
-          <strong>为什么现在还不能直接下结论</strong>
+          <strong>人工复核时需要注意</strong>
           <ul><li v-for="item in conclusionLimitations" :key="item">{{ item }}</li></ul>
         </div>
       </section>
@@ -344,6 +366,12 @@ onBeforeUnmount(releaseVisualizations)
             </div>
           </li>
         </ol>
+        <div v-if="replanSteps.length" class="conclusion-limitations">
+          <strong>Observation 驱动的后续决策</strong>
+          <ul>
+            <li v-for="step in replanSteps" :key="step.id">{{ stepSummary(step) }}</li>
+          </ul>
+        </div>
       </section>
 
       <section class="detail-grid agent-result-grid">
@@ -359,7 +387,7 @@ onBeforeUnmount(releaseVisualizations)
                   <strong>{{ verdictLabel(String(fusionFor(item).verdict || 'INCONCLUSIVE')) }}</strong>
                   <small>融合置信度：{{ confidenceLabel(fusionFor(item).confidence) }}</small>
                 </div>
-                <span>{{ fusionFor(item).decisionReady ? '具备阶段性判断条件' : '仍需补充证据' }}</span>
+                <span>{{ fusionFor(item).decisionReady ? '已形成 Agent 初步方向' : '仍需补充证据' }}</span>
               </div>
               <div class="aide-score-row">
                 <div><span>AI 生成概率</span><strong>{{ probabilityLabel(item.payload.syntheticProbability) }}</strong></div>

@@ -48,8 +48,8 @@ public class FakeAigcDetectionTool implements AgentTool {
                 Map.entry("syntheticProbability", 0.5),
                 Map.entry("authenticProbability", 0.5),
                 Map.entry("classification", "INCONCLUSIVE"),
-                Map.entry("syntheticThreshold", 0.8),
-                Map.entry("authenticThreshold", 0.2),
+                Map.entry("syntheticThreshold", 0.5),
+                Map.entry("authenticThreshold", 0.5),
                 Map.entry("processingMilliseconds", 1),
                 Map.entry("qualityAssessment", Map.of(
                         "status", "PASS", "modelEligible", true, "qualityScore", 100, "issues", List.of())),

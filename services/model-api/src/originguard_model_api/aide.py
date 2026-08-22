@@ -22,8 +22,10 @@ AIDE_MODEL = "AIDE GenImage train"
 AIDE_VERSION = "official-6725b710"
 AIDE_INPUT_SIZE = 256
 AIDE_MAX_BYTES = 25 * 1024 * 1024
-AIDE_SYNTHETIC_THRESHOLD = 0.80
-AIDE_AUTHENTIC_THRESHOLD = 0.20
+# AIDE's official evaluation uses a 0.5 binary decision boundary. These two
+# response fields remain for API compatibility and intentionally share it.
+AIDE_SYNTHETIC_THRESHOLD = 0.50
+AIDE_AUTHENTIC_THRESHOLD = 0.50
 
 
 class QualityIssue(BaseModel):
@@ -391,9 +393,7 @@ class LocalAideDetector:
     def _classify(self, synthetic_probability: float) -> str:
         if synthetic_probability >= AIDE_SYNTHETIC_THRESHOLD:
             return "LIKELY_SYNTHETIC"
-        if synthetic_probability <= AIDE_AUTHENTIC_THRESHOLD:
-            return "LIKELY_AUTHENTIC"
-        return "INCONCLUSIVE"
+        return "LIKELY_AUTHENTIC"
 
     def _resolve_path(self, configured: str, repository_root: Path) -> Path:
         path = Path(configured)

@@ -12,7 +12,7 @@ import org.springframework.stereotype.Component;
         matchIfMissing = true)
 public class FakePlanner implements AgentPlanner {
     public static final String PLAN_CODE = "deterministic_media_rag_pipeline";
-    public static final String PLAN_VERSION = "1.3.0";
+    public static final String PLAN_VERSION = "1.4.0";
 
     public PlannerPlan plan(AgentExecutionContext context, String goal) {
         List<SkillSelection> skills = List.of(
@@ -43,5 +43,21 @@ public class FakePlanner implements AgentPlanner {
                 "CLIP media typing is ready; run the fixed deterministic evidence pipeline with type-aware AIDE interpretation",
                 skills,
                 Map.of("mode", "DETERMINISTIC", "assetCount", context.assets().size()));
+    }
+
+    @Override
+    public ReplanDecision replan(ReplanRequest request) {
+        if (request.remainingSkills().isEmpty()) {
+            return new ReplanDecision(
+                    ReplanAction.STOP,
+                    "既定取证步骤已全部完成，停止调用工具并进入结果汇总",
+                    List.of(),
+                    Map.of("mode", "DETERMINISTIC", "decisionNumber", request.decisionNumber()));
+        }
+        return new ReplanDecision(
+                ReplanAction.CONTINUE,
+                "当前观察未触发固定测试规划器调整计划，继续执行剩余步骤",
+                request.remainingSkills(),
+                Map.of("mode", "DETERMINISTIC", "decisionNumber", request.decisionNumber()));
     }
 }

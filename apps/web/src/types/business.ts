@@ -96,7 +96,11 @@ export interface ReviewTask {
   id: string
   reviewerId: string
   status: ReviewStatus
+  finalConclusion: EvidenceConclusion | null
   decisionReason: string
+  agentAssessmentIncluded: boolean
+  agentTaskId: string | null
+  agentAssessmentSnapshot: Record<string, unknown>
   createdBy: string
   decidedBy: string | null
   citedEvidenceIds: string[]
