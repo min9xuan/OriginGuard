@@ -76,12 +76,12 @@ class BusinessCoreIntegrationTests {
     }
 
     @Test
-    void administratorAndReviewerCanReadButCannotMutateCases() throws Exception {
+    void administratorCanReadButCannotMutateCases() throws Exception {
         String investigator = token("investigator");
         String assetId = registerAsset(investigator, randomSha());
         createCase(investigator, "只读权限验证", assetId);
 
-        for (String username : new String[] {"admin", "reviewer"}) {
+        for (String username : new String[] {"admin"}) {
             String token = token(username);
             mockMvc.perform(get("/api/v1/cases").header("Authorization", bearer(token)))
                     .andExpect(status().isOk());
@@ -192,7 +192,7 @@ class BusinessCoreIntegrationTests {
         mockMvc.perform(post("/api/v1/cases/{id}/transitions", caseId)
                         .header("Authorization", bearer(token))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(transitionJson("WAITING_REVIEW", 0)))
+                        .content(transitionJson("WAITING_CONFIRMATION", 0)))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("CASE_STATUS_CONFLICT"));
 
@@ -201,34 +201,31 @@ class BusinessCoreIntegrationTests {
         mockMvc.perform(post("/api/v1/cases/{id}/transitions", caseId)
                         .header("Authorization", bearer(token))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(transitionJson("WAITING_REVIEW", 2)))
+                        .content(transitionJson("WAITING_CONFIRMATION", 2)))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("CASE_EVIDENCE_REQUIRED"));
     }
 
     @Test
-    void assignmentEvidenceAndIndependentReviewFormACompleteWorkflow() throws Exception {
+    void assignmentEvidenceAndInvestigatorConfirmationFormACompleteWorkflow() throws Exception {
         String investigator = token("investigator");
         String admin = token("admin");
-        String reviewer = token("reviewer");
         String assetId = registerAsset(investigator, randomSha());
-        MvcResult created = createCase(investigator, "M1.2 人工审核闭环", assetId);
+        MvcResult created = createCase(investigator, "Agent 调查与结果确认闭环", assetId);
         String caseId = JsonPath.read(created.getResponse().getContentAsString(), "$.investigationCase.id");
 
         transition(investigator, caseId, "READY", 0, 1);
         transition(investigator, caseId, "INVESTIGATING", 1, 2);
 
         UUID investigatorId = userId("investigator");
-        UUID reviewerId = userId("reviewer");
         mockMvc.perform(post("/api/v1/cases/{id}/assignment", caseId)
                         .header("Authorization", bearer(admin))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"investigatorId":"%s","reviewerId":"%s","version":2}
-                                """.formatted(investigatorId, reviewerId)))
+                                {"investigatorId":"%s","version":2}
+                                """.formatted(investigatorId)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.assignedInvestigatorId").value(investigatorId.toString()))
-                .andExpect(jsonPath("$.assignedReviewerId").value(reviewerId.toString()))
                 .andExpect(jsonPath("$.version").value(3));
 
         mockMvc.perform(post("/api/v1/cases/{id}/evidence", caseId)
@@ -255,44 +252,44 @@ class BusinessCoreIntegrationTests {
         String evidenceId = JsonPath.read(
                 evidenceResult.getResponse().getContentAsString(), "$.evidence[0].id");
 
-        transition(investigator, caseId, "WAITING_REVIEW", 4, 5);
+        transition(investigator, caseId, "WAITING_CONFIRMATION", 4, 5);
 
         MvcResult workflow = mockMvc.perform(get("/api/v1/cases/{id}/workflow", caseId)
-                        .header("Authorization", bearer(reviewer)))
+                        .header("Authorization", bearer(investigator)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.evidence.length()").value(1))
-                .andExpect(jsonPath("$.reviewTasks[0].status").value("PENDING"))
-                .andExpect(jsonPath("$.reviewTasks[0].reviewerId").value(reviewerId.toString()))
+                .andExpect(jsonPath("$.decisions[0].status").value("PENDING"))
+                .andExpect(jsonPath("$.decisions[0].confirmerId").value(investigatorId.toString()))
                 .andReturn();
-        String taskId = JsonPath.read(workflow.getResponse().getContentAsString(), "$.reviewTasks[0].id");
+        String taskId = JsonPath.read(workflow.getResponse().getContentAsString(), "$.decisions[0].id");
 
-        mockMvc.perform(post("/api/v1/cases/{caseId}/reviews/{taskId}/decision", caseId, taskId)
+        mockMvc.perform(post("/api/v1/cases/{caseId}/decisions/{taskId}/confirmation", caseId, taskId)
                         .header("Authorization", bearer(admin))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(reviewJson("LIKELY_AUTHENTIC", "", evidenceId, 0, 5)))
                 .andExpect(status().isForbidden());
 
-        mockMvc.perform(post("/api/v1/cases/{caseId}/reviews/{taskId}/decision", caseId, taskId)
-                        .header("Authorization", bearer(reviewer))
+        mockMvc.perform(post("/api/v1/cases/{caseId}/decisions/{taskId}/confirmation", caseId, taskId)
+                        .header("Authorization", bearer(investigator))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(reviewJson("LIKELY_AUTHENTIC", "人工复核同意该判断", evidenceId, 0, 5)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.reviewTasks[0].status").value("APPROVED"))
-                .andExpect(jsonPath("$.reviewTasks[0].finalConclusion").value("LIKELY_AUTHENTIC"))
-                .andExpect(jsonPath("$.reviewTasks[0].agentAssessmentIncluded").value(false))
-                .andExpect(jsonPath("$.reviewTasks[0].citedEvidenceIds[0]").value(evidenceId));
+                .andExpect(jsonPath("$.decisions[0].status").value("CONFIRMED"))
+                .andExpect(jsonPath("$.decisions[0].finalConclusion").value("LIKELY_AUTHENTIC"))
+                .andExpect(jsonPath("$.decisions[0].agentAssessmentIncluded").value(false))
+                .andExpect(jsonPath("$.decisions[0].citedEvidenceIds[0]").value(evidenceId));
 
-        mockMvc.perform(get("/api/v1/cases/{id}", caseId).header("Authorization", bearer(reviewer)))
+        mockMvc.perform(get("/api/v1/cases/{id}", caseId).header("Authorization", bearer(investigator)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.investigationCase.status").value("CONFIRMED"))
+                .andExpect(jsonPath("$.investigationCase.status").value("COMPLETED"))
                 .andExpect(jsonPath("$.investigationCase.version").value(6));
         mockMvc.perform(get("/api/v1/cases/{id}/audit", caseId)
-                        .header("Authorization", bearer(reviewer)))
+                        .header("Authorization", bearer(investigator)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[*].action", hasItem("CASE_ASSIGNMENT_CHANGED")))
                 .andExpect(jsonPath("$[*].action", hasItem("EVIDENCE_ADDED")))
-                .andExpect(jsonPath("$[*].action", hasItem("REVIEW_TASK_CREATED")))
-                .andExpect(jsonPath("$[*].action", hasItem("REVIEW_APPROVED")));
+                .andExpect(jsonPath("$[*].action", hasItem("RESULT_CONFIRMATION_CREATED")))
+                .andExpect(jsonPath("$[*].action", hasItem("RESULT_CONFIRMED")));
     }
 
     @Test

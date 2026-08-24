@@ -100,7 +100,7 @@ public class ModelApiAigcDetectionTool implements AgentTool {
             findings.add(Map.copyOf(finding));
         }
         if (findings.isEmpty()) {
-            throw new IllegalStateException("AIDE requires at least one linked image asset");
+            throw new IllegalStateException("AIGC detection requires at least one linked image asset");
         }
         Map<String, Object> first = findings.getFirst();
         String overallClassification = aggregateClassification(findings);
@@ -138,14 +138,14 @@ public class ModelApiAigcDetectionTool implements AgentTool {
             HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() != 200) {
                 throw new IllegalStateException(
-                        "AIDE model API returned HTTP " + response.statusCode() + ": " + response.body());
+                        "AIGC detection API returned HTTP " + response.statusCode() + ": " + response.body());
             }
             return objectMapper.readValue(response.body(), new TypeReference<>() {});
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
-            throw new IllegalStateException("AIDE request was interrupted", exception);
+            throw new IllegalStateException("AIGC detection request was interrupted", exception);
         } catch (IOException exception) {
-            throw new IllegalStateException("AIDE model API is unavailable at " + endpoint, exception);
+            throw new IllegalStateException("AIGC detection API is unavailable at " + endpoint, exception);
         }
     }
 

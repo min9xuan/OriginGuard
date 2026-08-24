@@ -28,27 +28,27 @@ public class MediaContentAnalyzer {
 
     public Analysis analyze(byte[] content, String declaredContentType) {
         if (content.length == 0) {
-            throw invalid("Uploaded file is empty");
+            throw invalid("上传文件为空");
         }
         String detected = detectContentType(content);
         if (declaredContentType != null
                 && !declaredContentType.isBlank()
                 && !declaredContentType.equalsIgnoreCase(detected)) {
-            throw invalid("Declared MIME does not match the file signature");
+            throw invalid("文件声明类型与实际内容不一致，实际格式为 " + detected);
         }
         Dimensions dimensions = readDimensions(content);
         long pixels = (long) dimensions.width() * dimensions.height();
         if (pixels > MAX_PIXELS) {
-            throw invalid("Decoded image exceeds the 40 megapixel safety limit");
+            throw invalid("图片解码后的像素总量超过 4000 万安全限制");
         }
         BufferedImage image;
         try {
             image = ImageIO.read(new ByteArrayInputStream(content));
         } catch (Exception exception) {
-            throw invalid("Image decoder rejected the uploaded file");
+            throw invalid("图片解码器无法读取该文件");
         }
         if (image == null) {
-            throw invalid("Uploaded bytes are not a decodable JPEG or PNG image");
+            throw invalid("上传内容不是可解码的 JPEG、PNG 或 WebP 图片");
         }
         return new Analysis(
                 detected,
@@ -61,15 +61,15 @@ public class MediaContentAnalyzer {
 
     private Dimensions readDimensions(byte[] content) {
         try (var input = ImageIO.createImageInputStream(new ByteArrayInputStream(content))) {
-            if (input == null) throw invalid("Unable to inspect image header");
+            if (input == null) throw invalid("无法读取图片文件头");
             Iterator<ImageReader> readers = ImageIO.getImageReaders(input);
-            if (!readers.hasNext()) throw invalid("No safe image reader is available for this file");
+            if (!readers.hasNext()) throw invalid("当前服务没有可用于该图片格式的安全解码器");
             ImageReader reader = readers.next();
             try {
                 reader.setInput(input, true, true);
                 int width = reader.getWidth(0);
                 int height = reader.getHeight(0);
-                if (width <= 0 || height <= 0) throw invalid("Image dimensions are invalid");
+                if (width <= 0 || height <= 0) throw invalid("图片尺寸无效");
                 return new Dimensions(width, height);
             } finally {
                 reader.dispose();
@@ -77,7 +77,7 @@ public class MediaContentAnalyzer {
         } catch (BusinessConflictException exception) {
             throw exception;
         } catch (Exception exception) {
-            throw invalid("Image header could not be decoded safely");
+            throw invalid("无法安全解码图片文件头");
         }
     }
 
@@ -99,7 +99,18 @@ public class MediaContentAnalyzer {
                 && (content[2] & 0xff) == 0xff) {
             return "image/jpeg";
         }
-        throw invalid("Only JPEG and PNG signatures are supported in M3.1");
+        if (content.length >= 12
+                && content[0] == 'R'
+                && content[1] == 'I'
+                && content[2] == 'F'
+                && content[3] == 'F'
+                && content[8] == 'W'
+                && content[9] == 'E'
+                && content[10] == 'B'
+                && content[11] == 'P') {
+            return "image/webp";
+        }
+        throw invalid("当前仅支持 JPEG、PNG 和 WebP 图片，请确认文件真实格式");
     }
 
     private String sha256(byte[] content) {

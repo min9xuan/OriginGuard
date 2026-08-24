@@ -5,8 +5,8 @@ import com.originguard.investigation.domain.AgentEvidenceCandidate;
 import com.originguard.investigation.domain.EvidenceConclusion;
 import com.originguard.investigation.domain.EvidenceConfidence;
 import com.originguard.investigation.domain.InvestigationEvidence;
-import com.originguard.investigation.domain.ReviewStatus;
-import com.originguard.investigation.domain.ReviewTask;
+import com.originguard.investigation.domain.CaseDecision;
+import com.originguard.investigation.domain.ConfirmationStatus;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
@@ -38,7 +38,7 @@ public class InvestigationWorkflowRepository {
                         JOIN sys_role r ON r.id = ur.role_id
                         WHERE u.tenant_id = :tenantId
                           AND u.enabled = TRUE
-                          AND r.code IN ('INVESTIGATOR', 'REVIEWER')
+                          AND r.code = 'INVESTIGATOR'
                         ORDER BY r.code, u.display_name, u.id
                         """)
                 .param("tenantId", tenantId)
@@ -71,18 +71,17 @@ public class InvestigationWorkflowRepository {
     }
 
     public void insertAssignment(
-            UUID tenantId, UUID caseId, UUID investigatorId, UUID reviewerId, UUID assignedBy) {
+            UUID tenantId, UUID caseId, UUID investigatorId, UUID assignedBy) {
         jdbcClient.sql("""
                         INSERT INTO case_assignment(
-                            tenant_id, case_id, investigator_id, reviewer_id, assigned_by
+                            tenant_id, case_id, investigator_id, assigned_by
                         ) VALUES (
-                            :tenantId, :caseId, :investigatorId, :reviewerId, :assignedBy
+                            :tenantId, :caseId, :investigatorId, :assignedBy
                         )
                         """)
                 .param("tenantId", tenantId)
                 .param("caseId", caseId)
                 .param("investigatorId", investigatorId)
-                .param("reviewerId", reviewerId)
                 .param("assignedBy", assignedBy)
                 .update();
     }
@@ -215,70 +214,70 @@ public class InvestigationWorkflowRepository {
                 .single();
     }
 
-    public ReviewTask insertReviewTask(
-            UUID id, UUID tenantId, UUID caseId, UUID reviewerId, UUID createdBy) {
+    public CaseDecision insertDecision(
+            UUID id, UUID tenantId, UUID caseId, UUID confirmerId, UUID createdBy) {
         jdbcClient.sql("""
-                        INSERT INTO review_task(id, tenant_id, case_id, reviewer_id, created_by)
-                        VALUES (:id, :tenantId, :caseId, :reviewerId, :createdBy)
+                        INSERT INTO case_decision(id, tenant_id, case_id, confirmer_id, created_by)
+                        VALUES (:id, :tenantId, :caseId, :confirmerId, :createdBy)
                         """)
                 .param("id", id)
                 .param("tenantId", tenantId)
                 .param("caseId", caseId)
-                .param("reviewerId", reviewerId)
+                .param("confirmerId", confirmerId)
                 .param("createdBy", createdBy)
                 .update();
-        return findReviewTask(tenantId, caseId, id).orElseThrow();
+        return findDecision(tenantId, caseId, id).orElseThrow();
     }
 
-    public List<ReviewTask> findReviewTasks(UUID tenantId, UUID caseId) {
-        return jdbcClient.sql(REVIEW_SELECT + """
+    public List<CaseDecision> findDecisions(UUID tenantId, UUID caseId) {
+        return jdbcClient.sql(DECISION_SELECT + """
                          WHERE r.tenant_id = :tenantId AND r.case_id = :caseId
                          ORDER BY r.created_at DESC, r.id
                         """)
                 .param("tenantId", tenantId)
                 .param("caseId", caseId)
-                .query(this::mapReview)
+                .query(this::mapDecision)
                 .list();
     }
 
-    public Optional<ReviewTask> findReviewTask(UUID tenantId, UUID caseId, UUID taskId) {
-        return jdbcClient.sql(REVIEW_SELECT + """
-                         WHERE r.tenant_id = :tenantId AND r.case_id = :caseId AND r.id = :taskId
+    public Optional<CaseDecision> findDecision(UUID tenantId, UUID caseId, UUID decisionId) {
+        return jdbcClient.sql(DECISION_SELECT + """
+                         WHERE r.tenant_id = :tenantId AND r.case_id = :caseId AND r.id = :decisionId
                         """)
                 .param("tenantId", tenantId)
                 .param("caseId", caseId)
-                .param("taskId", taskId)
-                .query(this::mapReview)
+                .param("decisionId", decisionId)
+                .query(this::mapDecision)
                 .optional();
     }
 
-    public boolean decideReview(
+    public boolean confirmDecision(
             UUID tenantId,
             UUID caseId,
-            UUID taskId,
-            UUID reviewerId,
+            UUID decisionId,
+            UUID confirmerId,
             long expectedVersion,
-            ReviewStatus decision,
+            ConfirmationStatus decision,
             EvidenceConclusion finalConclusion,
             String reason,
             UUID agentTaskId,
             Map<String, Object> agentAssessmentSnapshot) {
         boolean includeAgentAssessment = agentTaskId != null;
         int updated = jdbcClient.sql("""
-                        UPDATE review_task
+                        UPDATE case_decision
                         SET status = :decision,
                             final_conclusion = :finalConclusion,
                             decision_reason = :reason,
                             agent_assessment_included = :includeAgentAssessment,
                             agent_task_id = :agentTaskId,
                             agent_assessment_snapshot = CAST(:agentAssessmentSnapshot AS jsonb),
-                            decided_by = :reviewerId,
+                            decided_by = :confirmerId,
                             decided_at = CURRENT_TIMESTAMP,
                             version = version + 1
                         WHERE tenant_id = :tenantId
                           AND case_id = :caseId
-                          AND id = :taskId
-                          AND reviewer_id = :reviewerId
+                          AND id = :decisionId
+                          AND confirmer_id = :confirmerId
                           AND status = 'PENDING'
                           AND version = :expectedVersion
                         """)
@@ -288,10 +287,10 @@ public class InvestigationWorkflowRepository {
                 .param("includeAgentAssessment", includeAgentAssessment)
                 .param("agentTaskId", agentTaskId)
                 .param("agentAssessmentSnapshot", writeJson(agentAssessmentSnapshot))
-                .param("reviewerId", reviewerId)
+                .param("confirmerId", confirmerId)
                 .param("tenantId", tenantId)
                 .param("caseId", caseId)
-                .param("taskId", taskId)
+                .param("decisionId", decisionId)
                 .param("expectedVersion", expectedVersion)
                 .update();
         return updated == 1;
@@ -336,16 +335,16 @@ public class InvestigationWorkflowRepository {
         return count == evidenceIds.size();
     }
 
-    public void replaceReviewEvidenceReferences(
-            UUID tenantId, UUID reviewTaskId, List<UUID> evidenceIds) {
-        jdbcClient.sql("DELETE FROM review_evidence_reference WHERE tenant_id = :tenantId AND review_task_id = :taskId")
-                .param("tenantId", tenantId).param("taskId", reviewTaskId).update();
+    public void replaceDecisionEvidenceReferences(
+            UUID tenantId, UUID decisionId, List<UUID> evidenceIds) {
+        jdbcClient.sql("DELETE FROM result_evidence_reference WHERE tenant_id = :tenantId AND decision_id = :decisionId")
+                .param("tenantId", tenantId).param("decisionId", decisionId).update();
         for (UUID evidenceId : evidenceIds) {
             jdbcClient.sql("""
-                            INSERT INTO review_evidence_reference(tenant_id, review_task_id, evidence_id)
-                            VALUES (:tenantId, :taskId, :evidenceId)
+                            INSERT INTO result_evidence_reference(tenant_id, decision_id, evidence_id)
+                            VALUES (:tenantId, :decisionId, :evidenceId)
                             """)
-                    .param("tenantId", tenantId).param("taskId", reviewTaskId)
+                    .param("tenantId", tenantId).param("decisionId", decisionId)
                     .param("evidenceId", evidenceId).update();
         }
     }
@@ -377,14 +376,14 @@ public class InvestigationWorkflowRepository {
                 rs.getTimestamp("created_at").toInstant());
     }
 
-    private ReviewTask mapReview(ResultSet rs, int rowNum) throws SQLException {
+    private CaseDecision mapDecision(ResultSet rs, int rowNum) throws SQLException {
         Timestamp decidedAt = rs.getTimestamp("decided_at");
-        return new ReviewTask(
+        return new CaseDecision(
                 rs.getObject("id", UUID.class),
                 rs.getObject("tenant_id", UUID.class),
                 rs.getObject("case_id", UUID.class),
-                rs.getObject("reviewer_id", UUID.class),
-                ReviewStatus.valueOf(rs.getString("status")),
+                rs.getObject("confirmer_id", UUID.class),
+                ConfirmationStatus.valueOf(rs.getString("status")),
                 rs.getString("final_conclusion") == null
                         ? null
                         : EvidenceConclusion.valueOf(rs.getString("final_conclusion")),
@@ -406,18 +405,18 @@ public class InvestigationWorkflowRepository {
             FROM investigation_evidence
             """;
 
-    private static final String REVIEW_SELECT = """
-           SELECT r.id, r.tenant_id, r.case_id, r.reviewer_id, r.status, r.final_conclusion,
+    private static final String DECISION_SELECT = """
+           SELECT r.id, r.tenant_id, r.case_id, r.confirmer_id, r.status, r.final_conclusion,
                   r.decision_reason, r.agent_assessment_included, r.agent_task_id,
                   r.agent_assessment_snapshot::text AS agent_assessment_snapshot,
                    r.created_by, r.decided_by, r.version, r.created_at, r.decided_at,
                    ARRAY(
                        SELECT ref.evidence_id
-                       FROM review_evidence_reference ref
-                       WHERE ref.tenant_id = r.tenant_id AND ref.review_task_id = r.id
+                       FROM result_evidence_reference ref
+                       WHERE ref.tenant_id = r.tenant_id AND ref.decision_id = r.id
                        ORDER BY ref.created_at, ref.evidence_id
                    ) AS cited_evidence_ids
-            FROM review_task r
+            FROM case_decision r
             """;
 
     private java.util.Map<String, Object> readJson(String json) throws SQLException {

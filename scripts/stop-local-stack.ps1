@@ -78,6 +78,13 @@ if ($state -and $state.dockerDesktopStartedByScript) {
     }
 }
 
+if ($state -and $state.PSObject.Properties['detachedInputFile']) {
+    $detachedInputFile = [string]$state.detachedInputFile
+    if (Test-Path -LiteralPath $detachedInputFile) {
+        Remove-Item -LiteralPath $detachedInputFile -Force -ErrorAction SilentlyContinue
+    }
+}
+
 if (Test-Path -LiteralPath $pidFile) { Remove-Item -LiteralPath $pidFile -Force }
 
 Write-Host 'OriginGuard local stack is stopped.' -ForegroundColor Green

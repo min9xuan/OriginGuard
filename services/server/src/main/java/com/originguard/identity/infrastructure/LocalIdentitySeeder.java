@@ -25,25 +25,11 @@ public class LocalIdentitySeeder implements ApplicationRunner {
                     "case:read",
                     "case:update",
                     "case:submit",
+                    "result:confirm",
                     "agent:run",
                     "agent:cancel",
                     "agent:trace:read",
                     "report:read",
-                    "knowledge:read",
-                    "audit:case:read"),
-            "REVIEWER",
-            List.of(
-                    "asset:read",
-                    "case:read",
-                    "agent:run",
-                    "agent:trace:read",
-                    "review:read",
-                    "review:approve",
-                    "review:reject",
-                    "case:archive",
-                    "report:read",
-                    "report:edit",
-                    "report:finalize",
                     "knowledge:read",
                     "audit:case:read"),
             "ADMIN",
@@ -85,7 +71,6 @@ public class LocalIdentitySeeder implements ApplicationRunner {
         seedTenant();
         ROLE_PERMISSIONS.forEach(this::seedRole);
         seedUser("investigator", "Demo Investigator", "INVESTIGATOR");
-        seedUser("reviewer", "Demo Reviewer", "REVIEWER");
         seedUser("admin", "Demo Administrator", "ADMIN");
     }
 

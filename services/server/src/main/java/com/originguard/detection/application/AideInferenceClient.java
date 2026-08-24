@@ -37,31 +37,31 @@ public class AideInferenceClient {
             HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() != 200) {
                 throw new IllegalStateException(
-                        "AIDE model API returned HTTP " + response.statusCode() + ": " + response.body());
+                        "AIGC detection API returned HTTP " + response.statusCode() + ": " + response.body());
             }
             Map<String, Object> payload = objectMapper.readValue(response.body(), new TypeReference<>() {});
             Map<?, ?> quality = payload.get("qualityAssessment") instanceof Map<?, ?> value ? value : Map.of();
             Object qualityStatus = quality.containsKey("status") ? quality.get("status") : "UNKNOWN";
             return new Inference(
                     number(payload.get("syntheticProbability")),
-                    String.valueOf(payload.getOrDefault("model", "AIDE")),
+                    String.valueOf(payload.getOrDefault("model", "Generative content detector")),
                     String.valueOf(payload.getOrDefault("modelVersion", "unknown")),
                     ((Number) payload.getOrDefault("processingMilliseconds", 0)).longValue(),
                     String.valueOf(qualityStatus));
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
-            throw new IllegalStateException("AIDE evaluation request was interrupted", exception);
+            throw new IllegalStateException("AIGC model evaluation request was interrupted", exception);
         } catch (IOException exception) {
-            throw new IllegalStateException("AIDE model API is unavailable at " + endpoint, exception);
+            throw new IllegalStateException("AIGC detection API is unavailable at " + endpoint, exception);
         }
     }
 
     private double number(Object value) {
         if (!(value instanceof Number number)) {
-            throw new IllegalStateException("AIDE response did not contain syntheticProbability");
+            throw new IllegalStateException("AIGC detector response did not contain syntheticProbability");
         }
         double result = number.doubleValue();
-        if (result < 0 || result > 1) throw new IllegalStateException("Invalid AIDE probability: " + result);
+        if (result < 0 || result > 1) throw new IllegalStateException("Invalid AIGC detection probability: " + result);
         return result;
     }
 

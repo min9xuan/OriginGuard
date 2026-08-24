@@ -29,7 +29,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class InvestigationCaseService {
     public static final String RESOURCE_TYPE = "INVESTIGATION_CASE";
     private static final Set<CaseStatus> M1_TRANSITION_TARGETS =
-            EnumSet.of(CaseStatus.READY, CaseStatus.INVESTIGATING, CaseStatus.WAITING_REVIEW);
+            EnumSet.of(CaseStatus.READY, CaseStatus.INVESTIGATING, CaseStatus.WAITING_CONFIRMATION);
     private static final DateTimeFormatter CASE_DATE =
             DateTimeFormatter.ofPattern("yyyyMMdd").withZone(ZoneOffset.UTC);
 
@@ -107,9 +107,9 @@ public class InvestigationCaseService {
         CurrentActor actor = actorProvider.getRequiredActor();
         InvestigationCase current = require(actor.tenantId(), id);
         accessPolicy.requireCanModify(current, actor);
-        if (current.status() != CaseStatus.DRAFT && current.status() != CaseStatus.REJECTED) {
+        if (current.status() != CaseStatus.DRAFT) {
             throw new BusinessConflictException(
-                    "CASE_NOT_EDITABLE", "Only draft or rejected cases can be edited");
+                    "CASE_NOT_EDITABLE", "Only draft cases can be edited");
         }
         boolean updated = repository.updateDetails(
                 actor.tenantId(),
@@ -134,9 +134,9 @@ public class InvestigationCaseService {
         CurrentActor actor = actorProvider.getRequiredActor();
         InvestigationCase current = require(actor.tenantId(), caseId);
         accessPolicy.requireCanModify(current, actor);
-        if (current.status() != CaseStatus.DRAFT && current.status() != CaseStatus.REJECTED) {
+        if (current.status() != CaseStatus.DRAFT) {
             throw new BusinessConflictException(
-                    "CASE_ASSET_LINK_NOT_ALLOWED", "Assets can only be linked to draft or rejected cases");
+                    "CASE_ASSET_LINK_NOT_ALLOWED", "Assets can only be linked to draft cases");
         }
         MediaAsset asset = mediaAssetService.require(actor.tenantId(), assetId);
         if (repository.isAssetLinked(caseId, assetId)) {
@@ -177,8 +177,8 @@ public class InvestigationCaseService {
         boolean updated = repository.updateStatus(
                 actor.tenantId(), id, expectedVersion, current.status(), target);
         requireVersion(updated);
-        if (target == CaseStatus.WAITING_REVIEW) {
-            workflowService.prepareReviewTask(current, actor);
+        if (target == CaseStatus.WAITING_CONFIRMATION) {
+            workflowService.prepareDecision(current, actor);
         }
         auditService.record(
                 actor.tenantId(),
@@ -187,6 +187,32 @@ public class InvestigationCaseService {
                 RESOURCE_TYPE,
                 id,
                 Map.of("from", current.status().name(), "to", target.name()));
+        return details(require(actor.tenantId(), id));
+    }
+
+    @Transactional
+    public CaseDetails prepareConfirmationAfterAgent(
+            UUID id, long expectedVersion, UUID agentTaskId) {
+        CurrentActor actor = actorProvider.getRequiredActor();
+        InvestigationCase current = require(actor.tenantId(), id);
+        accessPolicy.requireCanModify(current, actor);
+        if (current.status() != CaseStatus.INVESTIGATING) {
+            throw new BusinessConflictException(
+                    "CASE_STATUS_CONFLICT",
+                    "Agent confirmation can only be prepared after an investigating case completes analysis");
+        }
+        requireTransitionPermission(actor, CaseStatus.WAITING_CONFIRMATION);
+        requireVersion(repository.updateStatus(
+                actor.tenantId(), id, expectedVersion, current.status(), CaseStatus.WAITING_CONFIRMATION));
+        workflowService.prepareDecisionAfterAgent(current, actor, agentTaskId);
+        auditService.record(
+                actor.tenantId(),
+                actor.userId(),
+                "CASE_STATUS_CHANGED",
+                RESOURCE_TYPE,
+                id,
+                Map.of("from", current.status().name(), "to", CaseStatus.WAITING_CONFIRMATION.name(),
+                        "source", "AGENT_COMPLETED"));
         return details(require(actor.tenantId(), id));
     }
 
@@ -208,7 +234,7 @@ public class InvestigationCaseService {
     }
 
     private void requireTransitionPermission(CurrentActor actor, CaseStatus target) {
-        String permission = target == CaseStatus.WAITING_REVIEW ? "case:submit" : "case:update";
+        String permission = target == CaseStatus.WAITING_CONFIRMATION ? "case:submit" : "case:update";
         if (!actor.hasPermission(permission)) {
             throw new AccessDeniedException("Missing permission: " + permission);
         }

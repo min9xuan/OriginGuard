@@ -5,12 +5,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-public record ReviewTask(
+public record CaseDecision(
         UUID id,
         UUID tenantId,
         UUID caseId,
-        UUID reviewerId,
-        ReviewStatus status,
+        UUID confirmerId,
+        ConfirmationStatus status,
         EvidenceConclusion finalConclusion,
         String decisionReason,
         boolean agentAssessmentIncluded,
@@ -22,7 +22,7 @@ public record ReviewTask(
         long version,
         Instant createdAt,
         Instant decidedAt) {
-    public ReviewTask {
+    public CaseDecision {
         citedEvidenceIds = List.copyOf(citedEvidenceIds);
         agentAssessmentSnapshot = Map.copyOf(agentAssessmentSnapshot);
     }

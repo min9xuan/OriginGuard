@@ -6,49 +6,25 @@ import { useAuthStore } from '../stores/auth'
 const auth = useAuthStore()
 const route = useRoute()
 const router = useRouter()
-
-const navigation = computed(() =>
-  [
-    { label: '工作台', path: '/workspace', permission: '' },
-    { label: '媒体资产', path: '/assets', permission: 'asset:read' },
-    { label: '调查案件', path: '/cases', permission: 'case:read' },
-    { label: '取证知识库', path: '/knowledge', permission: 'knowledge:read' },
-    { label: '模型评测', path: '/model-evaluation', permission: 'model:read' },
-    { label: 'Agent 任务', path: '/agent-tasks', permission: 'agent:trace:read' },
-  ].filter((item) => !item.permission || auth.hasPermission(item.permission)),
-)
+const isAgentResultPage = computed(() => route.path.startsWith('/analyze/agent-tasks/'))
 
 async function logout() {
   await auth.logout()
-  await router.replace('/login')
+  await router.replace('/')
 }
 </script>
 
 <template>
-  <div class="app-frame">
-    <aside class="app-sidebar">
-      <RouterLink class="brand" to="/workspace">
-        <span class="brand-mark">OG</span>
-        <span>OriginGuard</span>
-      </RouterLink>
-      <nav class="app-nav" aria-label="主导航">
-        <RouterLink
-          v-for="item in navigation"
-          :key="item.path"
-          :to="item.path"
-          :class="{ active: route.path === item.path || (item.path !== '/workspace' && route.path.startsWith(item.path)) }"
-        >
-          {{ item.label }}
-        </RouterLink>
+  <div class="investigator-frame">
+    <header class="investigator-header">
+      <RouterLink class="public-brand" to="/"><span class="brand-symbol">OG</span><span><strong>OriginGuard</strong><small>Media authenticity research</small></span></RouterLink>
+      <nav aria-label="调查员导航">
+        <RouterLink to="/analyze">开始检测</RouterLink>
+        <RouterLink to="/analyze/history">检测记录</RouterLink>
+        <a class="header-github-link" href="https://github.com/min9xuan/OriginGuard" target="_blank" rel="noreferrer">GitHub ↗</a>
+        <button type="button" @click="logout">退出</button>
       </nav>
-      <div v-if="auth.user" class="sidebar-user">
-        <strong>{{ auth.user.displayName }}</strong>
-        <span>{{ auth.user.tenantCode }} · {{ auth.user.roles.join(' / ') }}</span>
-        <el-button text @click="logout">退出登录</el-button>
-      </div>
-    </aside>
-    <section class="app-content">
-      <RouterView />
-    </section>
+    </header>
+    <section class="investigator-content" :class="{ 'agent-result-surface': isAgentResultPage }"><RouterView /></section>
   </div>
 </template>

@@ -17,8 +17,8 @@ from pydantic import BaseModel
 from torch.nn import functional
 from torchvision import transforms
 
-AIDE_PROVIDER = "AIDE_ICLR_2025_OFFICIAL"
-AIDE_MODEL = "AIDE GenImage train"
+AIDE_PROVIDER = "GENERIC_AIGC_DETECTOR"
+AIDE_MODEL = "Multi-feature generative content detector"
 AIDE_VERSION = "official-6725b710"
 AIDE_INPUT_SIZE = 256
 AIDE_MAX_BYTES = 25 * 1024 * 1024
@@ -121,7 +121,7 @@ class LocalAideDetector:
         if not content:
             raise ValueError("Image content cannot be empty")
         if len(content) > AIDE_MAX_BYTES:
-            raise ValueError(f"Image exceeds the {AIDE_MAX_BYTES} byte AIDE limit")
+            raise ValueError(f"Image exceeds the {AIDE_MAX_BYTES} byte detector limit")
         image = self._open_image(content)
         width, height = image.size
         quality = self._assess_quality(image)
@@ -141,7 +141,7 @@ class LocalAideDetector:
                 processingMilliseconds=0,
                 qualityAssessment=quality,
                 limitations=[
-                    "输入未通过图像质量门控，AIDE 未执行，不能据此判断媒体真伪",
+                    "输入未通过图像质量门控，生成内容鉴别模型未执行，不能据此判断媒体真伪",
                 ],
             )
         self._load()
@@ -172,14 +172,14 @@ class LocalAideDetector:
             height=height,
             processingMilliseconds=round((time.perf_counter() - started) * 1000),
             qualityAssessment=quality,
-            attentionMethod="Grad-CAM on AIDE semantic ConvNeXt feature map",
+            attentionMethod="Grad-CAM on the detector semantic feature map",
             attentionTarget=classification,
             attentionOverlayPngBase64=self._attention_overlay(image, attention),
             limitations=[
-                "AIDE 分数未经 OriginGuard 业务数据校准，不能单独作为最终真伪结论",
+                "生成内容鉴别模型分数未经 OriginGuard 业务数据校准，不能单独作为最终真伪结论",
                 "压缩、缩放、截图和未见过的生成器可能影响模型泛化能力",
                 "热力图表示语义分支对当前分类的注意力贡献，不等同于精确的生成或篡改区域",
-                "AIDE 的频域分支参与最终概率计算，但当前热力图不对频域分支进行空间定位",
+                "鉴别模型的频域分支参与最终概率计算，但当前热力图不对频域分支进行空间定位",
             ],
         )
 
@@ -370,7 +370,7 @@ class LocalAideDetector:
             with Image.open(io.BytesIO(content)) as source:
                 return cast(Image.Image, source.convert("RGB"))
         except (UnidentifiedImageError, OSError) as exception:
-            raise ValueError("AIDE input is not a supported image") from exception
+            raise ValueError("Detector input is not a supported image") from exception
 
     def _resolve_device(self) -> torch.device:
         if self._requested_device == "auto":

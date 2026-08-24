@@ -42,6 +42,7 @@ public class AgentTaskService {
     private final AgentPolicyEngine policyEngine;
     private final AuditService auditService;
     private final AgentArtifactStorage artifactStorage;
+    private final InvestigationCaseService investigationCaseService;
     private final int maxReplans;
 
     public AgentTaskService(
@@ -56,6 +57,7 @@ public class AgentTaskService {
             AgentPolicyEngine policyEngine,
             AuditService auditService,
             AgentArtifactStorage artifactStorage,
+            InvestigationCaseService investigationCaseService,
             @Value("${originguard.agent.max-replans:6}") int maxReplans) {
         this.repository = repository;
         this.caseRepository = caseRepository;
@@ -68,6 +70,7 @@ public class AgentTaskService {
         this.policyEngine = policyEngine;
         this.auditService = auditService;
         this.artifactStorage = artifactStorage;
+        this.investigationCaseService = investigationCaseService;
         this.maxReplans = Math.max(0, maxReplans);
     }
 
@@ -125,7 +128,6 @@ public class AgentTaskService {
         return new AgentArtifactContent(content, "image/png");
     }
 
-    @Transactional
     public AgentTaskDetails run(UUID taskId, long expectedVersion) {
         CurrentActor actor = actorProvider.getRequiredActor();
         AgentTask pending = requireTask(actor.tenantId(), taskId);
@@ -142,6 +144,7 @@ public class AgentTaskService {
         }
 
         AgentTask running = requireTask(actor.tenantId(), taskId);
+        boolean completedSuccessfully = false;
         try {
             AgentExecutionContext context = contextBuilder.build(investigationCase, actor);
             repository.appendStep(
@@ -185,6 +188,11 @@ public class AgentTaskService {
                     "caseId", investigationCase.id().toString(),
                     "goal", running.goal(),
                     "assetIds", context.assets().stream().map(MediaAsset::id).map(UUID::toString).toList());
+            repository.appendStep(
+                    actor.tenantId(), taskId, "TOOL_EXECUTION_STARTED", "SUCCEEDED",
+                    mediaTypeSkill.code(), mediaTypeTool.code(),
+                    Map.of("assetCount", context.assets().size()),
+                    Map.of("message", "正在使用 CLIP 识别媒体内容类型"));
             Map<String, Object> mediaTypeOutput = mediaTypeTool.execute(context, mediaTypeInput);
             repository.appendStep(
                     actor.tenantId(), taskId, "TOOL_CALLED", "SUCCEEDED",
@@ -223,6 +231,14 @@ public class AgentTaskService {
                     Map.of("checkpointVersion", checkpointVersion),
                     Map.of("remainingStepBudget", remainingBudget));
 
+            repository.appendStep(
+                    actor.tenantId(), taskId, "PLAN_REQUESTED", "SUCCEEDED",
+                    null, null,
+                    Map.of(
+                            "caseId", investigationCase.id().toString(),
+                            "assetCount", enrichedContext.assets().size(),
+                            "mediaTypeContextCount", enrichedContext.mediaTypeContexts().size()),
+                    Map.of("message", "规划器正在读取案件目标、媒体类型和取证知识，准备制定调查方案"));
             AgentPlanner.PlannerPlan generatedPlan = planner.plan(enrichedContext, running.goal());
             repository.appendStep(
                     actor.tenantId(), taskId, "PLAN_GENERATED", "SUCCEEDED",
@@ -285,6 +301,11 @@ public class AgentTaskService {
                         "goal", running.goal(),
                         "assetIds", enrichedContext.assets().stream().map(MediaAsset::id).map(UUID::toString).toList(),
                         "mediaTypeContexts", mediaTypeContextsForTool(enrichedContext.mediaTypeContexts()));
+                repository.appendStep(
+                        actor.tenantId(), taskId, "TOOL_EXECUTION_STARTED", "SUCCEEDED",
+                        skill.code(), tool.code(),
+                        Map.of("assetCount", enrichedContext.assets().size()),
+                        Map.of("message", "正在执行“" + skill.description() + "”"));
                 Map<String, Object> toolOutput = tool.execute(enrichedContext, toolInput);
                 if (SkillRegistry.AIGC_DETECTION_SKILL.equals(skill.code())) {
                     aigcDetection = toolOutput;
@@ -319,7 +340,7 @@ public class AgentTaskService {
                                     "citationCount", retrieval.citations().size(),
                                     "knowledgeAvailable", retrieval.knowledgeAvailable()));
                 } else if (SkillRegistry.AIGC_DETECTION_SKILL.equals(skill.code())) {
-                    List<Map<String, Object>> findings = findings(toolOutput, "AIDE");
+                    List<Map<String, Object>> findings = findings(toolOutput, "AIGC detection model");
                     for (Map<String, Object> finding : findings) {
                         UUID assetId = UUID.fromString(String.valueOf(finding.get("assetId")));
                         AgentObservation observation = repository.insertObservation(
@@ -375,6 +396,14 @@ public class AgentTaskService {
                                 Map.of("maxReplans", maxReplans),
                                 Map.of("remainingSkillCodes", skillCodes(pendingSkills)));
                     } else {
+                        repository.appendStep(
+                                actor.tenantId(), taskId, "REPLAN_REQUESTED", "SUCCEEDED",
+                                skill.code(), null,
+                                Map.of(
+                                        "decisionNumber", replanCount,
+                                        "latestObservationCount", latestObservations.size(),
+                                        "remainingSkillCodes", skillCodes(pendingSkills)),
+                                Map.of("message", "规划器正在结合最新观察，判断继续、调整计划或停止"));
                         try {
                             decision = planValidator.validateDecision(
                                     planner.replan(new AgentPlanner.ReplanRequest(
@@ -471,6 +500,7 @@ public class AgentTaskService {
                     InvestigationCaseService.RESOURCE_TYPE,
                     investigationCase.id(),
                     Map.of("agentTaskId", taskId.toString(), "executedSkills", List.copyOf(executedSkills)));
+            completedSuccessfully = true;
         } catch (RuntimeException exception) {
             repository.appendStep(
                     actor.tenantId(), taskId, "TASK_FAILED", "FAILED", null, null,
@@ -483,6 +513,20 @@ public class AgentTaskService {
                     InvestigationCaseService.RESOURCE_TYPE,
                     investigationCase.id(),
                     Map.of("agentTaskId", taskId.toString(), "message", safeMessage(exception)));
+        }
+        if (completedSuccessfully) {
+            try {
+                investigationCaseService.prepareConfirmationAfterAgent(
+                        investigationCase.id(), investigationCase.version(), taskId);
+            } catch (RuntimeException exception) {
+                auditService.record(
+                        actor.tenantId(),
+                        actor.userId(),
+                        "RESULT_CONFIRMATION_PREPARATION_FAILED",
+                        InvestigationCaseService.RESOURCE_TYPE,
+                        investigationCase.id(),
+                        Map.of("agentTaskId", taskId.toString(), "message", safeMessage(exception)));
+            }
         }
         return details(actor.tenantId(), taskId);
     }
@@ -546,7 +590,7 @@ public class AgentTaskService {
             case SkillRegistry.METADATA_SKILL -> "已对 " + assetCount + " 个图片完成格式、尺寸与 EXIF 摘要提取。";
             case SkillRegistry.SIMILARITY_SKILL -> "已对案件内 " + assetCount + " 个图片完成 dHash 感知相似度比较，共形成 "
                     + toolOutput.getOrDefault("comparisonCount", 0) + " 组比较结果。";
-            case SkillRegistry.AIGC_DETECTION_SKILL -> "AIDE 已分析 "
+            case SkillRegistry.AIGC_DETECTION_SKILL -> "生成内容鉴别模型已分析 "
                     + toolOutput.getOrDefault("analyzedImageCount", 0)
                     + " 个图片，最高 AI 生成概率为 "
                     + percent(toolOutput.get("maximumSyntheticProbability"))
@@ -591,7 +635,7 @@ public class AgentTaskService {
             Object summary = explanation.get("summary");
             if (summary != null && !String.valueOf(summary).isBlank()) return String.valueOf(summary);
         }
-        return "AIDE 已分析“" + finding.getOrDefault("filename", "当前图片") + "”，AI 生成概率为 "
+        return "生成内容鉴别模型已分析“" + finding.getOrDefault("filename", "当前图片") + "”，AI 生成概率为 "
                 + percent(finding.get("syntheticProbability")) + "；该结果仍需人工复核。";
     }
 
@@ -609,11 +653,11 @@ public class AgentTaskService {
         String summary = !generatedSummary.isBlank()
                 ? generatedSummary
                 : aigcDetection.isEmpty()
-                ? "自动取证步骤已完成，但没有取得 AIDE 检测结果，当前证据不足以判断。"
-                : "质量门控与 AIGC 证据融合已完成；AIDE 最高 AI 生成概率为 " + score
-                        + "，Agent 初步判断为“" + verdictLabel(verdict) + "”。该结果不是审核员最终裁决。";
+                ? "自动取证步骤已完成，但没有取得生成内容鉴别结果，当前证据不足以判断。"
+                : "质量门控与 AIGC 证据融合已完成；鉴别模型最高 AI 生成概率为 " + score
+                        + "，Agent 初步判断为“" + verdictLabel(verdict) + "”。该结果仍需负责调查员确认。";
         List<String> limitations = new ArrayList<>();
-        limitations.add("当前使用 AIDE 官方 0.5 边界形成实验性初步判断，尚未经过 OriginGuard 业务验证集校准");
+        limitations.add("当前使用生成内容鉴别模型的 0.5 实验边界形成初步判断，尚未经过 OriginGuard 业务验证集校准");
         limitations.add("CLIP 只负责媒体类型与模型路由，不作为 AIGC 真伪证据");
         limitations.add("尚未配置 C2PA 内容凭证校验器和篡改区域定位模型");
         limitations.add(plannerLimitation(plan.provider()));
@@ -631,7 +675,7 @@ public class AgentTaskService {
                 aigcDetection.getOrDefault("overallClassification", "INCONCLUSIVE"));
         conclusion.put("fusionPolicyVersion", AigcEvidenceFusion.POLICY_VERSION);
         if (aigcDetection.get("maximumSyntheticProbability") != null) {
-            conclusion.put("aideSyntheticProbability", aigcDetection.get("maximumSyntheticProbability"));
+            conclusion.put("primaryModelSyntheticProbability", aigcDetection.get("maximumSyntheticProbability"));
         }
         conclusion.put("planner", plan.provider());
         conclusion.put("plannerSummary", plan.summary());

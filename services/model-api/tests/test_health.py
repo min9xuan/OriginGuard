@@ -35,8 +35,8 @@ class FakeAideDetector:
 
     def detect(self, content: bytes) -> AideDetection:
         return AideDetection(
-            provider="AIDE_ICLR_2025_OFFICIAL",
-            model="AIDE GenImage train",
+            provider="GENERIC_AIGC_DETECTOR",
+            model="Multi-feature generative content detector",
             modelVersion="test",
             checkpointSha256="a" * 64,
             device="cpu",

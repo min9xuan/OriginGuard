@@ -12,9 +12,12 @@ export const mediaApi = {
       accessToken,
     )
   },
-  upload(file: File, sha256: string, accessToken: string) {
+  upload(file: File, sha256: string, accessToken: string, detectedContentType = file.type) {
     const body = new FormData()
-    body.append('file', file)
+    const content = file.type === detectedContentType
+      ? file
+      : file.slice(0, file.size, detectedContentType)
+    body.append('file', content, file.name)
     body.append('sha256', sha256)
     return apiRequest<MediaAsset>('/assets/upload', { method: 'POST', body }, accessToken)
   },

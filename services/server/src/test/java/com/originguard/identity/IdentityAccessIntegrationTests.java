@@ -95,24 +95,24 @@ class IdentityAccessIntegrationTests {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.roles", hasItem("ADMIN")))
                 .andExpect(jsonPath("$.permissions", hasItem("user:manage")))
-                .andExpect(jsonPath("$.permissions", not(hasItem("review:approve"))))
+                .andExpect(jsonPath("$.permissions", not(hasItem("result:confirm"))))
                 .andExpect(jsonPath("$.permissions", not(hasItem("report:finalize"))));
 
         mockMvc.perform(get("/api/v1/admin/identity/summary")
                         .header("Authorization", bearer(accessToken)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.tenantCode").value("demo"))
-                .andExpect(jsonPath("$.users").value(3));
+                .andExpect(jsonPath("$.users").value(2));
     }
 
     @Test
-    void reviewerReceivesReviewAndFinalizePermissions() throws Exception {
-        String accessToken = accessToken(login("reviewer"));
+    void investigatorReceivesResultConfirmationPermission() throws Exception {
+        String accessToken = accessToken(login("investigator"));
         mockMvc.perform(get("/api/v1/auth/me").header("Authorization", bearer(accessToken)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.roles", hasItem("REVIEWER")))
-                .andExpect(jsonPath("$.permissions", hasItem("review:approve")))
-                .andExpect(jsonPath("$.permissions", hasItem("report:finalize")));
+                .andExpect(jsonPath("$.roles", hasItem("INVESTIGATOR")))
+                .andExpect(jsonPath("$.permissions", hasItem("result:confirm")))
+                .andExpect(jsonPath("$.permissions", not(hasItem("report:finalize"))));
     }
 
     @Test

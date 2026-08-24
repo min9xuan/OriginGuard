@@ -31,14 +31,14 @@ public class AigcEvidenceFusion {
             confidence = "UNAVAILABLE";
             agreement = "NOT_EVALUATED";
             decisionReady = false;
-            reasons.add("输入未通过质量门控，AIDE 未参与判定。");
+            reasons.add("输入未通过质量门控，生成内容鉴别模型未参与判定。");
             limitations.add("请提供分辨率和画面信息更完整的原始媒体后重新检测。");
         } else if (!isLikely(primaryVerdict)) {
             verdict = "INCONCLUSIVE";
             confidence = "LOW";
             agreement = "PRIMARY_INCONCLUSIVE";
             decisionReady = false;
-            reasons.add("CLIP 将媒体识别为“" + mediaTypeLabel + "”，但 AIDE 的生成痕迹得分处于不确定区间。");
+            reasons.add("CLIP 将媒体识别为“" + mediaTypeLabel + "”，但生成内容鉴别模型的得分处于不确定区间。");
             limitations.add("媒体类型只用于规划和解释，不能替代生成痕迹证据。");
         } else {
             verdict = primaryVerdict;
@@ -46,21 +46,21 @@ public class AigcEvidenceFusion {
             agreement = "AVAILABLE".equals(mediaTypeStatus)
                     ? "PRELIMINARY_WITH_TYPE_CONTEXT" : "PRELIMINARY_WITHOUT_TYPE_CONTEXT";
             decisionReady = true;
-            reasons.add("AIDE 已依据 0.5 实验决策阈值形成“" + primaryVerdict + "”的初步方向。");
+            reasons.add("生成内容鉴别模型已依据 0.5 实验决策阈值形成“" + primaryVerdict + "”的初步方向。");
             if ("AVAILABLE".equals(mediaTypeStatus)) {
                 reasons.add("CLIP 将媒体识别为“" + mediaTypeLabel + "”，该类型仅用于路由后续专用模型和解释适用边界。");
             } else {
                 limitations.add("本次未取得 CLIP 媒体类型，无法执行面向内容域的模型路由。");
             }
             if (!"PHOTOGRAPH".equals(mediaType)) {
-                limitations.add("尚未接入“" + mediaTypeLabel + "”专用 AIGC 检测模型，当前初步判断主要来自 AIDE。");
+                limitations.add("尚未接入“" + mediaTypeLabel + "”专用 AIGC 检测模型，当前初步判断主要来自通用生成内容鉴别模型。");
             }
-            limitations.add("这是 Agent 的模型初步判断，不是审核员最终裁决。");
+            limitations.add("这是 Agent 的模型初步判断，仍需负责调查员结合证据确认。");
         }
         if ("WARN".equals(qualityStatus)) {
             limitations.add("图像存在质量警告，模型输出需谨慎解释。");
         }
-        limitations.add("AIDE 只接收原始图像，不能接收 CLIP 文本提示；媒体类型仅影响编排、适用性判断和结果解释。");
+        limitations.add("生成内容鉴别模型只接收原始图像，不能接收 CLIP 文本提示；媒体类型仅影响编排、适用性判断和结果解释。");
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("policyVersion", POLICY_VERSION);

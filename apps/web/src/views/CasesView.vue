@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus'
 import { onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { caseApi } from '../api/cases'
 import { ApiRequestError } from '../api/http'
 import { useAuthStore } from '../stores/auth'
@@ -11,6 +11,8 @@ import { caseStatusLabel, priorityLabel } from '../utils/presentation'
 
 const auth = useAuthStore()
 const router = useRouter()
+const route = useRoute()
+const casePath = (caseId: string) => `${route.path.startsWith('/admin') ? '/admin' : '/analyze'}/cases/${caseId}`
 const cases = ref<InvestigationCase[]>([])
 const loading = ref(false)
 
@@ -47,7 +49,7 @@ onMounted(load)
         v-loading="loading"
         empty-text="当前租户还没有案件"
         row-class-name="clickable-row"
-        @row-click="(row: InvestigationCase) => router.push(`/cases/${row.id}`)"
+        @row-click="(row: InvestigationCase) => router.push(casePath(row.id))"
       >
         <el-table-column prop="caseNumber" label="案件编号" width="190" />
         <el-table-column prop="title" label="标题" min-width="220" />

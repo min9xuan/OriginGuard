@@ -37,8 +37,10 @@ const auth = useAuthStore()
 const route = useRoute()
 const router = useRouter()
 const caseId = route.params.caseId as string
+const routePrefix = () => route.path.startsWith('/admin') ? '/admin' : '/analyze'
+const isAdminView = computed(() => route.path.startsWith('/admin'))
 const details = ref<CaseDetails | null>(null)
-const workflow = ref<CaseWorkflow>({ evidence: [], reviewTasks: [], agentEvidenceCandidates: [] })
+const workflow = ref<CaseWorkflow>({ evidence: [], decisions: [], agentEvidenceCandidates: [] })
 const caseAgentTasks = ref<AgentTask[]>([])
 const allAssets = ref<MediaAsset[]>([])
 const assignees = ref<AssignableUser[]>([])
@@ -48,7 +50,7 @@ const saving = ref(false)
 const agentRunning = ref(false)
 const selectedAssetId = ref('')
 const edit = reactive({ title: '', description: '', priority: 'NORMAL' as CasePriority })
-const assignment = reactive({ investigatorId: '', reviewerId: '' })
+const assignment = reactive({ investigatorId: '' })
 const evidence = reactive({
   assetId: '',
   title: '',
@@ -77,7 +79,7 @@ const canOperate = computed(() => {
   )
 })
 const canEdit = computed(() => Boolean(
-  canOperate.value && current.value && ['DRAFT', 'REJECTED'].includes(current.value.status),
+  canOperate.value && current.value && current.value.status === 'DRAFT',
 ))
 const canAddEvidence = computed(() => Boolean(
   current.value &&
@@ -94,19 +96,18 @@ const canRunAgent = computed(() => Boolean(
 const canAssign = computed(() => Boolean(
   current.value &&
     auth.hasPermission('case:assign') &&
-    ['DRAFT', 'READY', 'INVESTIGATING', 'REJECTED'].includes(current.value.status),
+    ['DRAFT', 'READY', 'INVESTIGATING'].includes(current.value.status),
 ))
 const investigatorOptions = computed(() => assignees.value.filter((user) => user.role === 'INVESTIGATOR'))
-const reviewerOptions = computed(() => assignees.value.filter((user) => user.role === 'REVIEWER'))
 const availableAssets = computed(() => {
   const linked = new Set(details.value?.assets.map((asset) => asset.id) ?? [])
   return allAssets.value.filter((asset) => !linked.has(asset.id))
 })
-const pendingReview = computed(() => workflow.value.reviewTasks.find((task) => task.status === 'PENDING') ?? null)
-const canReview = computed(() => Boolean(
-  current.value?.status === 'WAITING_REVIEW' &&
-    pendingReview.value?.reviewerId === auth.user?.id &&
-    (auth.hasPermission('review:approve') || auth.hasPermission('review:reject')),
+const pendingDecision = computed(() => workflow.value.decisions.find((task) => task.status === 'PENDING') ?? null)
+const canConfirmResult = computed(() => Boolean(
+  current.value?.status === 'WAITING_CONFIRMATION' &&
+    pendingDecision.value?.confirmerId === auth.user?.id &&
+    auth.hasPermission('result:confirm'),
 ))
 const availableAgentObservations = computed(() => workflow.value.agentEvidenceCandidates.filter(
   (candidate) => !candidate.promotedEvidenceId,
@@ -121,17 +122,16 @@ const caseStages = [
   { label: '材料准备', description: '完善案件信息并关联待调查媒体' },
   { label: '等待调查', description: '确认人员职责并正式开始调查' },
   { label: '调查取证', description: 'Agent 提供观察，调查员核验并形成证据' },
-  { label: '独立审核', description: '审核员依据正式证据作出决定' },
-  { label: '形成结果', description: '案件确认通过或退回补充调查' },
+  { label: '结果确认', description: '调查员核对 Agent 初判与正式证据' },
+  { label: '形成结果', description: '确认结论，或因证据不足继续调查' },
 ]
 const currentStageIndex = computed(() => {
   const indexByStatus: Record<CaseStatus, number> = {
     DRAFT: 0,
     READY: 1,
     INVESTIGATING: 2,
-    WAITING_REVIEW: 3,
-    CONFIRMED: 4,
-    REJECTED: 4,
+    WAITING_CONFIRMATION: 3,
+    COMPLETED: 4,
     FAILED: 2,
     ARCHIVED: 4,
   }
@@ -174,7 +174,7 @@ async function load() {
     assignees.value = assigneeResult
     caseAgentTasks.value = agentTaskResult.filter((task) => task.caseId === caseId)
     if (
-      workflowResult.reviewTasks.some((task) => task.status === 'PENDING') &&
+      workflowResult.decisions.some((task) => task.status === 'PENDING') &&
       review.citedEvidenceIds.length === 0
     ) {
       review.citedEvidenceIds = workflowResult.evidence.map((item) => item.id)
@@ -195,7 +195,6 @@ function setDetails(value: CaseDetails) {
   edit.description = value.investigationCase.description
   edit.priority = value.investigationCase.priority
   assignment.investigatorId = value.investigationCase.assignedInvestigatorId ?? ''
-  assignment.reviewerId = value.investigationCase.assignedReviewerId ?? ''
 }
 
 async function save() {
@@ -216,10 +215,10 @@ async function linkAsset() {
 }
 
 async function assignCase() {
-  if (!current.value || !assignment.investigatorId || !assignment.reviewerId) return
+  if (!current.value || !assignment.investigatorId) return
   await mutate(async () => {
     await caseApi.assign(caseId, { ...assignment, version: current.value!.version }, auth.accessToken)
-    ElMessage.success('调查员与独立审核员已分派')
+    ElMessage.success('案件负责调查员已更新')
   })
 }
 
@@ -265,13 +264,11 @@ async function startAgent() {
   try {
     const created = await agentApi.create(
       caseId,
-      '先使用 CLIP 识别媒体类型，再由 LLM 规划文件完整性、图片元数据、AIDE 生成检测、感知相似度分析和取证知识检索',
+      '先使用 CLIP 识别媒体类型，再由 LLM 规划文件完整性、图片元数据、生成内容鉴别、感知相似度分析和取证知识检索',
       13,
       auth.accessToken,
     )
-    const completed = await agentApi.run(created.task.id, created.task.version, auth.accessToken)
-    ElMessage.success('媒体分析与 RAG 检索 Agent 已完成，可查看完整 Trace')
-    await router.push(`/agent-tasks/${completed.task.id}`)
+    await router.push({ path: `${routePrefix()}/agent-tasks/${created.task.id}`, query: { autorun: '1' } })
   } catch (error) {
     showError(error)
   } finally {
@@ -294,26 +291,26 @@ async function previewAsset(asset: Pick<MediaAsset, 'id' | 'originalFilename' | 
   }
 }
 
-async function decideReview() {
-  if (!current.value || !pendingReview.value) return
+async function confirmResult() {
+  if (!current.value || !pendingDecision.value) return
   await mutate(async () => {
-    await caseApi.decideReview(
+    await caseApi.confirmResult(
       caseId,
-      pendingReview.value!.id,
+      pendingDecision.value!.id,
       {
         finalConclusion: review.finalConclusion,
         reason: review.reason,
         citedEvidenceIds: review.citedEvidenceIds,
         includeAgentAssessment: review.includeAgentAssessment,
         agentTaskId: review.includeAgentAssessment ? latestCompletedAgentTask.value?.id ?? null : null,
-        taskVersion: pendingReview.value!.version,
+        taskVersion: pendingDecision.value!.version,
         caseVersion: current.value!.version,
       },
       auth.accessToken,
     )
     review.reason = ''
     review.citedEvidenceIds = []
-    ElMessage.success(review.finalConclusion === 'INCONCLUSIVE' ? '已退回补充调查' : '人工最终判断已提交')
+    ElMessage.success(review.finalConclusion === 'INCONCLUSIVE' ? '证据不足，已返回调查' : '最终结果已确认')
   })
 }
 
@@ -324,7 +321,7 @@ async function mutate(action: () => Promise<void>) {
     await load()
   } catch (error) {
     showError(error)
-    if (error instanceof ApiRequestError && ['CASE_VERSION_CONFLICT', 'REVIEW_VERSION_CONFLICT'].includes(error.code)) {
+    if (error instanceof ApiRequestError && ['CASE_VERSION_CONFLICT', 'DECISION_VERSION_CONFLICT'].includes(error.code)) {
       await load()
     }
   } finally {
@@ -343,7 +340,7 @@ function assetName(id: string) {
 }
 
 function openAgentTask(taskId: string) {
-  void router.push(`/agent-tasks/${taskId}`)
+  void router.push(`${routePrefix()}/agent-tasks/${taskId}`)
 }
 
 function agentTaskHint(task: AgentTask) {
@@ -381,15 +378,15 @@ onBeforeUnmount(() => {
         <div>
           <p class="eyebrow">{{ current.caseNumber }}</p>
           <h1>{{ current.title }}</h1>
-          <p>{{ current.description || '暂无调查说明' }}</p>
+          <p>{{ current.description || (isAdminView ? '暂无调查说明' : '暂无检测说明') }}</p>
         </div>
         <div class="status-stack">
           <el-tag size="large" effect="dark">{{ caseStatusLabel(current.status) }}</el-tag>
-          <span>version {{ current.version }}</span>
+          <span v-if="isAdminView">version {{ current.version }}</span>
         </div>
       </header>
 
-      <section class="detail-grid">
+      <section v-if="isAdminView" class="detail-grid">
         <article class="panel">
           <div class="section-heading"><div><h2>案件信息</h2><p>基础字段仅在草稿或驳回状态可编辑</p></div></div>
           <el-form label-position="top">
@@ -408,7 +405,7 @@ onBeforeUnmount(() => {
         <article class="panel workflow-panel">
           <div class="workflow-heading">
             <div><span>案件处理流程</span><strong>{{ caseStatusLabel(current.status) }}</strong></div>
-            <small>Agent 只辅助取证，不会自动推进案件或代替人工审核。</small>
+          <small>Agent 提供可追溯的初步判断，最终结果由调查员确认。</small>
           </div>
           <ol class="case-stage-list">
             <li v-for="(stage, index) in caseStages" :key="stage.label" :class="stageState(index)">
@@ -424,8 +421,8 @@ onBeforeUnmount(() => {
           </div>
           <div v-if="canRunAgent" class="workflow-action agent-action">
             <div><strong>Agent 辅助取证</strong><small>生成候选观察，仍需调查员确认后才能成为正式证据。</small></div>
-            <el-button type="success" :loading="agentRunning" :disabled="saving" @click="startAgent">
-              {{ agentRunning ? 'Agent 正在取证' : '运行取证 Agent' }}
+            <el-button type="primary" plain :loading="agentRunning" :disabled="saving" @click="startAgent">
+              {{ agentRunning ? '正在创建任务' : '运行取证 Agent' }}
             </el-button>
           </div>
           <small v-if="!nextTransition && !canRunAgent" class="workflow-empty">当前身份或案件状态没有可执行操作。</small>
@@ -435,10 +432,10 @@ onBeforeUnmount(() => {
       <section v-if="auth.hasPermission('agent:trace:read')" class="panel case-agent-history">
         <div class="section-heading">
           <div>
-            <h2>本案 Agent 取证记录</h2>
-            <p>{{ caseAgentTasks.length }} 次分析均只属于当前案件；进入任务可查看方案、观察和知识依据</p>
+            <h2>{{ isAdminView ? '本案 Agent 取证记录' : '图片分析记录' }}</h2>
+            <p>{{ isAdminView ? `${caseAgentTasks.length} 次分析均只属于当前案件；进入任务可查看方案、观察和知识依据` : `共 ${caseAgentTasks.length} 次分析，点击记录可查看初步判断并完成人工核验` }}</p>
           </div>
-          <el-button plain @click="router.push('/agent-tasks')">查看全部 Agent 任务</el-button>
+      <el-button plain @click="router.push(`${routePrefix()}/agent-tasks`)">{{ isAdminView ? '查看全部 Agent 任务' : '返回检测记录' }}</el-button>
         </div>
         <div v-if="recentAgentTasks.length" class="case-agent-task-list">
           <article v-for="task in recentAgentTasks" :key="task.id" class="case-agent-task-card" @click="openAgentTask(task.id)">
@@ -456,22 +453,18 @@ onBeforeUnmount(() => {
         <el-empty v-else description="本案尚未运行 Agent；可在案件处理流程中启动一次辅助取证" />
       </section>
 
-      <section class="panel assignment-panel">
+      <section v-if="isAdminView" class="panel assignment-panel">
         <div class="section-heading">
-          <div><h2>职责分派</h2><p>调查与审核必须由不同人员承担</p></div>
+          <div><h2>案件负责人</h2><p>管理员可以调整负责运行 Agent、核验证据并确认结果的调查员</p></div>
         </div>
         <div v-if="canAssign" class="assignment-form">
           <el-select v-model="assignment.investigatorId" placeholder="选择调查员">
             <el-option v-for="user in investigatorOptions" :key="user.id" :label="`${user.displayName}（${user.username}）`" :value="user.id" />
           </el-select>
-          <el-select v-model="assignment.reviewerId" placeholder="选择审核员">
-            <el-option v-for="user in reviewerOptions" :key="user.id" :label="`${user.displayName}（${user.username}）`" :value="user.id" />
-          </el-select>
-          <el-button type="primary" :disabled="!assignment.investigatorId || !assignment.reviewerId" :loading="saving" @click="assignCase">保存分派</el-button>
+          <el-button type="primary" :disabled="!assignment.investigatorId" :loading="saving" @click="assignCase">保存负责人</el-button>
         </div>
         <div v-else class="assignment-summary">
           <span>调查员：{{ assigneeName(current.assignedInvestigatorId) }}</span>
-          <span>审核员：{{ assigneeName(current.assignedReviewerId) }}</span>
         </div>
       </section>
 
@@ -502,7 +495,7 @@ onBeforeUnmount(() => {
         <el-empty v-else description="尚未关联媒体，案件不能进入 READY" />
       </section>
 
-      <section class="panel evidence-panel">
+      <section v-if="isAdminView" class="panel evidence-panel">
         <div class="section-heading"><div><h2>案件证据</h2><p>人工观察与经调查员确认纳入的 Agent Observation 均为正式证据；Agent 结果不自动形成结论</p></div></div>
         <div v-if="canAddEvidence && workflow.agentEvidenceCandidates.length" class="evidence-list">
           <article v-for="candidate in workflow.agentEvidenceCandidates" :key="candidate.observationId" class="evidence-card">
@@ -520,7 +513,7 @@ onBeforeUnmount(() => {
             </dl>
             <el-button
               v-if="!candidate.promotedEvidenceId"
-              type="success"
+              type="primary"
               plain
               :loading="saving"
               @click="promoteAgentObservation(candidate.observationId)"
@@ -574,18 +567,18 @@ onBeforeUnmount(() => {
         <el-empty v-else description="进入调查状态后，由分派的调查员记录人工证据或纳入 Agent Observation" />
       </section>
 
-      <section class="panel review-panel">
-        <div class="section-heading"><div><h2>人工最终判断</h2><p>选择结论、确认引用依据；Agent 仅提供可选参考，最终裁决始终由审核员负责</p></div></div>
-        <div v-if="canReview && pendingReview" class="review-decision">
+      <section v-if="isAdminView" class="panel review-panel">
+        <div class="section-heading"><div><h2>调查结果确认</h2><p>Agent 给出初步判断，负责调查员核对正式证据后确认或修正，不需要额外审核角色</p></div></div>
+        <div v-if="canConfirmResult && pendingDecision" class="review-decision">
           <div class="review-step-heading"><span>1</span><div><strong>选择最终结论</strong><small>前两项将确认结案；证据不足会退回调查员补充取证</small></div></div>
           <el-radio-group v-model="review.finalConclusion" class="verdict-radio-group">
-            <el-radio value="LIKELY_SYNTHETIC" border :disabled="!auth.hasPermission('review:approve')">
+            <el-radio value="LIKELY_SYNTHETIC" border>
               <strong>判定为 AI 生成</strong><small>现有证据足以支持合成内容判断</small>
             </el-radio>
-            <el-radio value="LIKELY_AUTHENTIC" border :disabled="!auth.hasPermission('review:approve')">
+            <el-radio value="LIKELY_AUTHENTIC" border>
               <strong>判定为非 AI 生成</strong><small>现有证据更支持真实或人工制作内容</small>
             </el-radio>
-            <el-radio value="INCONCLUSIVE" border :disabled="!auth.hasPermission('review:reject')">
+            <el-radio value="INCONCLUSIVE" border>
               <strong>证据不足</strong><small>暂不下结论，退回补充调查</small>
             </el-radio>
           </el-radio-group>
@@ -616,26 +609,26 @@ onBeforeUnmount(() => {
             type="primary"
             :disabled="!review.citedEvidenceIds.length"
             :loading="saving"
-            @click="decideReview"
-          >{{ review.finalConclusion === 'INCONCLUSIVE' ? '退回补充调查' : '提交人工最终判断' }}</el-button>
+            @click="confirmResult"
+          >{{ review.finalConclusion === 'INCONCLUSIVE' ? '继续补充调查' : '确认调查结果' }}</el-button>
         </div>
-        <ol v-if="workflow.reviewTasks.length" class="review-list">
-          <li v-for="task in workflow.reviewTasks" :key="task.id">
-            <el-tag :type="task.status === 'APPROVED' ? 'success' : task.status === 'REJECTED' ? 'danger' : 'warning'">{{ task.status }}</el-tag>
+        <ol v-if="workflow.decisions.length" class="review-list">
+          <li v-for="task in workflow.decisions" :key="task.id">
+            <el-tag :type="task.status === 'CONFIRMED' ? 'success' : task.status === 'RETURNED' ? 'warning' : 'info'">{{ task.status }}</el-tag>
             <span>{{ formatDate(task.createdAt) }}</span>
             <div>
               <strong v-if="task.finalConclusion">{{ finalConclusionLabel(task.finalConclusion) }}</strong>
-              <p>{{ task.decisionReason || '等待审核决定' }}</p>
+              <p>{{ task.decisionReason || '等待调查员确认' }}</p>
               <small v-if="task.agentAssessmentIncluded">已引用 Agent 初步判断：{{ verdictLabel(String(task.agentAssessmentSnapshot.verdict || 'INCONCLUSIVE')) }}</small>
             </div>
             <small v-if="task.citedEvidenceIds.length">引用证据：{{ task.citedEvidenceIds.map(evidenceTitle).join('、') }}</small>
           </li>
         </ol>
-        <el-empty v-else description="案件提交 WAITING_REVIEW 后将生成审核任务" />
+        <el-empty v-else description="完成取证并提交结果确认后，这里会显示调查员的最终选择" />
       </section>
 
-      <section class="panel audit-panel">
-        <div class="section-heading"><div><h2>审计时间线</h2><p>分派、证据和审核决定都会留痕</p></div></div>
+      <section v-if="isAdminView" class="panel audit-panel">
+        <div class="section-heading"><div><h2>审计时间线</h2><p>负责人变更、证据与结果确认都会留痕</p></div></div>
         <ol class="audit-list">
           <li v-for="entry in audit" :key="entry.id">
             <span>{{ formatDate(entry.createdAt) }}</span>

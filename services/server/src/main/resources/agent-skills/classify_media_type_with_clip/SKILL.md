@@ -1,7 +1,7 @@
 ---
 code: classify_media_type_with_clip
 version: 1.0.0
-description: 在规划前使用 CLIP 识别媒体内容类型，为 Skill 路由和 AIDE 结果解释提供语义上下文
+description: 在规划前使用 CLIP 识别媒体内容类型，为 Skill 路由和生成内容鉴别结果解释提供语义上下文
 requiredPermissions: agent:run,asset:read,case:read
 allowedCaseStatuses: INVESTIGATING
 allowedTools: model.classify_media_type_with_clip

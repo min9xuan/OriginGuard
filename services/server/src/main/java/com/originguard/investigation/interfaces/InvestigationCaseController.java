@@ -82,6 +82,14 @@ public class InvestigationCaseController {
         return CaseDetailsView.from(service.transition(caseId, request.version(), request.targetStatus()));
     }
 
+    @PostMapping("/{caseId}/agent-confirmation")
+    @PreAuthorize("hasAuthority('case:submit')")
+    public CaseDetailsView prepareAgentConfirmation(
+            @PathVariable UUID caseId, @Valid @RequestBody PrepareAgentConfirmationRequest request) {
+        return CaseDetailsView.from(service.prepareConfirmationAfterAgent(
+                caseId, request.version(), request.agentTaskId()));
+    }
+
     @GetMapping("/{caseId}/audit")
     @PreAuthorize("hasAuthority('audit:case:read')")
     public List<AuditEntryView> history(@PathVariable UUID caseId) {
@@ -104,6 +112,9 @@ public class InvestigationCaseController {
 
     public record TransitionCaseRequest(@NotNull CaseStatus targetStatus, @Min(0) long version) {}
 
+    public record PrepareAgentConfirmationRequest(
+            @NotNull UUID agentTaskId, @Min(0) long version) {}
+
     public record CaseSummaryView(
             UUID id,
             UUID tenantId,
@@ -114,7 +125,6 @@ public class InvestigationCaseController {
             CaseStatus status,
             UUID createdBy,
             UUID assignedInvestigatorId,
-            UUID assignedReviewerId,
             long version,
             Instant createdAt,
             Instant updatedAt) {
@@ -129,7 +139,6 @@ public class InvestigationCaseController {
                     investigationCase.status(),
                     investigationCase.createdBy(),
                     investigationCase.assignedInvestigatorId(),
-                    investigationCase.assignedReviewerId(),
                     investigationCase.version(),
                     investigationCase.createdAt(),
                     investigationCase.updatedAt());

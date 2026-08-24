@@ -6,6 +6,7 @@ import { ApiRequestError } from '../api/http'
 import { useAuthStore } from '../stores/auth'
 import type { MediaAsset, RegisterAssetRequest } from '../types/business'
 import { formatBytes, formatDate } from '../utils/format'
+import { detectImageFileType, type SupportedImageType } from '../utils/image-signature'
 import { sha256Hex } from '../utils/sha256'
 
 const auth = useAuthStore()
@@ -14,6 +15,7 @@ const loading = ref(false)
 const hashing = ref(false)
 const registering = ref(false)
 const selectedFile = ref<File | null>(null)
+const selectedContentType = ref<SupportedImageType | null>(null)
 const draft = ref<RegisterAssetRequest | null>(null)
 const previewUrl = ref('')
 const previewName = ref('')
@@ -35,13 +37,20 @@ async function selectFile(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file) return
+  const detectedContentType = await detectImageFileType(file)
+  if (!detectedContentType) {
+    ElMessage.warning('当前仅支持 JPEG、PNG 和 WebP 图片，请确认文件真实格式')
+    input.value = ''
+    return
+  }
   selectedFile.value = file
+  selectedContentType.value = detectedContentType
   draft.value = null
   hashing.value = true
   try {
     draft.value = {
       originalFilename: file.name,
-      contentType: file.type || 'application/octet-stream',
+      contentType: detectedContentType,
       byteSize: file.size,
       sha256: await sha256Hex(file),
     }
@@ -53,12 +62,13 @@ async function selectFile(event: Event) {
 }
 
 async function register() {
-  if (!draft.value || !selectedFile.value) return
+  if (!draft.value || !selectedFile.value || !selectedContentType.value) return
   registering.value = true
   try {
-    await mediaApi.upload(selectedFile.value, draft.value.sha256, auth.accessToken)
+    await mediaApi.upload(selectedFile.value, draft.value.sha256, auth.accessToken, selectedContentType.value)
     ElMessage.success('媒体文件已安全存储并完成服务端基础检查')
     selectedFile.value = null
+    selectedContentType.value = null
     draft.value = null
     await load()
   } catch (error) {
@@ -99,7 +109,7 @@ onBeforeUnmount(() => {
       <div>
         <p class="eyebrow">MEDIA REGISTRY</p>
         <h1>媒体资产记录</h1>
-        <p>M3.1 将 JPEG/PNG 原文件存入 MinIO，并由服务端复核文件签名、解码与 SHA-256。</p>
+        <p>JPEG、PNG 和 WebP 原文件存入 MinIO 前，服务端会复核真实文件签名、解码结果与 SHA-256。</p>
       </div>
       <el-tag type="success" effect="plain">Stored & verified</el-tag>
     </header>
@@ -110,7 +120,7 @@ onBeforeUnmount(() => {
         <p>浏览器预计算 SHA-256；后端读取真实字节再次计算并校验，单文件最大 25 MB。</p>
       </div>
       <label class="file-picker">
-        <input type="file" accept="image/*" @change="selectFile" />
+        <input type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" @change="selectFile" />
         <span>{{ selectedFile?.name ?? '选择图片文件' }}</span>
       </label>
       <div v-if="hashing" class="muted">正在计算 SHA-256…</div>

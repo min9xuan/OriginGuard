@@ -22,7 +22,7 @@ class AigcResultExplainerTests {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/v1/chat/completions", exchange -> {
             String request = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-            assertThat(request).contains("originguard_aide_explanation", "image_url", "插画或卡通", "仅原始图像");
+            assertThat(request).contains("originguard_aigc_detection_explanation", "image_url", "插画或卡通", "仅原始图像");
             byte[] response = """
                     {"choices":[{"message":{"content":"{\\"summary\\":\\"模型结果需要人工复核。\\",\\"supportingSignals\\":[\\"注意力集中在主体区域。\\"],\\"counterSignals\\":[\\"截图压缩可能影响结果。\\"],\\"limitations\\":[\\"热力图不是生成区域。\\"]}"}}]}
                     """.getBytes(StandardCharsets.UTF_8);
@@ -62,7 +62,7 @@ class AigcResultExplainerTests {
             String request = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
             assertThat(request).contains("originguard_agent_preliminary_assessment", "0.5", "CARTOON_AIGC_DETECTOR");
             String content = """
-                    {"verdict":"LIKELY_SYNTHETIC","confidence":"LOW","summary":"AIDE 初步倾向 AI 生成，等待人工复核。","supportingSignals":["AIDE 分数超过阈值。"],"counterSignals":["缺少领域模型。"],"missingEvidence":["卡通专用检测模型尚未配置。"]}
+                    {"verdict":"LIKELY_SYNTHETIC","confidence":"LOW","summary":"生成内容鉴别模型初步倾向 AI 生成，等待人工复核。","supportingSignals":["鉴别模型分数超过阈值。"],"counterSignals":["缺少领域模型。"],"missingEvidence":["卡通专用检测模型尚未配置。"]}
                     """.trim();
             byte[] response = new ObjectMapper().writeValueAsBytes(Map.of(
                     "choices", List.of(Map.of("message", Map.of("content", content)))));

@@ -5,9 +5,8 @@ const caseStatusLabels: Record<CaseStatus, string> = {
   DRAFT: '草稿',
   READY: '待调查',
   INVESTIGATING: '调查中',
-  WAITING_REVIEW: '待人工审核',
-  CONFIRMED: '已确认',
-  REJECTED: '已驳回',
+  WAITING_CONFIRMATION: '待结果确认',
+  COMPLETED: '已完成',
   FAILED: '处理失败',
   ARCHIVED: '已归档',
 }
@@ -20,9 +19,9 @@ const priorityLabels: Record<CasePriority, string> = {
 }
 
 const agentStatusLabels: Record<AgentTaskStatus, string> = {
-  PENDING: '等待运行',
-  RUNNING: '正在取证',
-  COMPLETED: '取证完成',
+  PENDING: '等待分析',
+  RUNNING: '正在分析',
+  COMPLETED: '分析完成',
   FAILED: '运行失败',
   CANCELLED: '已取消',
 }
@@ -32,19 +31,22 @@ const skillLabels: Record<string, { name: string; description: string }> = {
   verify_media_integrity: { name: '文件完整性检查', description: '核验文件哈希、大小和存储内容是否一致' },
   extract_image_metadata: { name: '图片元数据提取', description: '读取图片格式、尺寸和可用的元数据信息' },
   compare_perceptual_similarity: { name: '感知相似度分析', description: '在存在多个可比媒体时检查视觉相似程度' },
-  detect_aigc_with_aide: { name: 'AIDE 生成检测', description: '运行频域与语义混合特征模型，输出可追溯的 AIGC 检测分数' },
+  detect_aigc_with_aide: { name: '生成内容鉴别', description: '运行多特征生成内容鉴别模型，输出可追溯的 AIGC 检测分数' },
   retrieve_forensic_guidance: { name: '取证知识检索', description: '从知识库检索与当前案件相关的调查指引' },
 }
 
 const stepLabels: Record<string, { name: string; description: string }> = {
   CONTEXT_ASSEMBLED: { name: '整理案件上下文', description: '汇总案件、媒体和人工审核信息' },
   PLAN_GENERATED: { name: '生成调查方案', description: '多模态模型根据案件内容选择取证能力' },
+  PLAN_REQUESTED: { name: '规划器读取上下文', description: '模型正在读取案件、媒体类型与取证知识' },
   PLAN_VALIDATED: { name: '校验调查方案', description: '检查模型方案是否满足权限、预算和必选步骤' },
   REPLAN_DECIDED: { name: '根据观察决定下一步', description: '规划器读取最新观察，决定继续、调整计划或停止' },
+  REPLAN_REQUESTED: { name: '重新评估下一步', description: '模型正在结合最新 Observation 检查剩余计划' },
   REPLAN_FALLBACK: { name: '重规划降级', description: '动态决策异常，Harness 继续执行已校验的安全计划' },
   REPLAN_LIMIT_REACHED: { name: '达到重规划上限', description: '停止请求动态决策，继续完成当前安全计划' },
   SKILL_SELECTED: { name: '选择取证能力', description: '确定本轮将要执行的 Skill' },
   TOOL_CALLED: { name: '执行取证工具', description: '调用受控工具读取媒体并产生事实结果' },
+  TOOL_EXECUTION_STARTED: { name: '开始执行取证能力', description: '受控工具正在处理当前媒体' },
   KNOWLEDGE_RETRIEVAL_RECORDED: { name: '记录知识依据', description: '保存本次 RAG 检索结果和引用来源' },
   OBSERVATION_RECORDED: { name: '记录 Agent 观察', description: '将工具结果保存为待调查员确认的观察项' },
   CHECKPOINT_SAVED: { name: '保存运行检查点', description: '记录可恢复的任务执行进度' },
@@ -226,8 +228,9 @@ export function auditActionLabel(action: string) {
     AGENT_TASK_FAILED: 'Agent 取证失败',
     AGENT_OBSERVATION_INCLUDED: '纳入 Agent 观察',
     EVIDENCE_CREATED: '记录人工证据',
-    REVIEW_TASK_CREATED: '创建审核任务',
-    REVIEW_DECIDED: '提交审核决定',
+    RESULT_CONFIRMATION_CREATED: '进入结果确认',
+    RESULT_CONFIRMED: '确认调查结果',
+    RESULT_RETURNED: '返回补充调查',
   }
   return labels[action] ?? action
 }
@@ -246,7 +249,8 @@ export function auditSummary(action: string, details: Record<string, unknown>) {
     return `自动取证完成，共执行 ${skills} 项受控能力`
   }
   if (action === 'AGENT_OBSERVATION_INCLUDED') return '调查员已将一条 Agent 候选观察纳入正式证据'
-  if (action === 'CASE_ASSIGNED') return '调查员和独立审核员职责已更新'
-  if (action === 'REVIEW_DECIDED') return '指定审核员已提交审核决定'
+  if (action === 'CASE_ASSIGNED' || action === 'CASE_ASSIGNMENT_CHANGED') return '案件负责调查员已更新'
+  if (action === 'RESULT_CONFIRMED') return '调查员已确认最终结果'
+  if (action === 'RESULT_RETURNED') return '调查员认为证据不足，案件已返回调查'
   return Object.keys(details).length ? `已记录 ${Object.keys(details).length} 项操作信息` : '操作已记录'
 }

@@ -8,20 +8,18 @@ public enum CaseStatus {
     DRAFT,
     READY,
     INVESTIGATING,
-    WAITING_REVIEW,
-    CONFIRMED,
-    REJECTED,
+    WAITING_CONFIRMATION,
+    COMPLETED,
     FAILED,
     ARCHIVED;
 
     private static final Map<CaseStatus, Set<CaseStatus>> TRANSITIONS = Map.of(
             DRAFT, EnumSet.of(READY),
             READY, EnumSet.of(INVESTIGATING),
-            INVESTIGATING, EnumSet.of(WAITING_REVIEW, FAILED),
+            INVESTIGATING, EnumSet.of(WAITING_CONFIRMATION, FAILED),
             FAILED, EnumSet.of(INVESTIGATING),
-            WAITING_REVIEW, EnumSet.of(CONFIRMED, REJECTED),
-            REJECTED, EnumSet.of(INVESTIGATING),
-            CONFIRMED, EnumSet.of(ARCHIVED),
+            WAITING_CONFIRMATION, EnumSet.of(COMPLETED, INVESTIGATING),
+            COMPLETED, EnumSet.of(ARCHIVED),
             ARCHIVED, EnumSet.noneOf(CaseStatus.class));
 
     public boolean canTransitionTo(CaseStatus target) {

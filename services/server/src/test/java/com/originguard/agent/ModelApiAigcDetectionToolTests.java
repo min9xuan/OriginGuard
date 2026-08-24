@@ -61,7 +61,7 @@ class ModelApiAigcDetectionToolTests {
                     org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.eq(assetId),
                     org.mockito.ArgumentMatchers.any()))
                     .thenReturn(new AgentArtifactStorage.StoredArtifact(
-                            UUID.randomUUID(), "AIDE_ATTENTION_OVERLAY", "image/png", 7, "b".repeat(64)));
+                            UUID.randomUUID(), "AIGC_DETECTION_ATTENTION_OVERLAY", "image/png", 7, "b".repeat(64)));
             when(explainer.explain(org.mockito.ArgumentMatchers.anyString(),
                     org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
                     org.mockito.ArgumentMatchers.any()))
@@ -84,7 +84,7 @@ class ModelApiAigcDetectionToolTests {
                             "mediaTypeContexts", Map.of(assetId.toString(), mediaType("PHOTOGRAPH", "摄影图像"))));
 
             assertThat(receivedContentType.get()).isEqualTo("image/jpeg");
-            assertThat(output).containsEntry("provider", "AIDE_ICLR_2025_OFFICIAL");
+            assertThat(output).containsEntry("provider", "GENERIC_AIGC_DETECTOR");
             assertThat(output).containsEntry("overallClassification", "LIKELY_SYNTHETIC");
             assertThat(output).containsEntry("overallVerdict", "LIKELY_SYNTHETIC");
         } finally {
@@ -105,7 +105,7 @@ class ModelApiAigcDetectionToolTests {
                 Set.of("INVESTIGATOR"), Set.of("agent:run", "asset:read", "case:read"));
         InvestigationCase investigationCase = new InvestigationCase(
                 UUID.randomUUID(), tenantId, "OG-TEST", "中文文件名回归测试", "AIDE",
-                CasePriority.NORMAL, CaseStatus.INVESTIGATING, userId, userId, null,
+                CasePriority.NORMAL, CaseStatus.INVESTIGATING, userId, userId,
                 2, Instant.now(), Instant.now());
         return new AgentExecutionContext(actor, investigationCase, List.of(asset), 0);
     }
@@ -113,8 +113,8 @@ class ModelApiAigcDetectionToolTests {
     private String responseJson() {
         return """
                 {
-                  "provider":"AIDE_ICLR_2025_OFFICIAL",
-                  "model":"AIDE GenImage train",
+                  "provider":"GENERIC_AIGC_DETECTOR",
+                  "model":"Multi-feature generative content detector",
                   "modelVersion":"test",
                   "checkpointSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                   "device":"cpu",

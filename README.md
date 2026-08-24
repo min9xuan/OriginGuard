@@ -1,6 +1,6 @@
 # OriginGuard
 
-> 当前状态：M5.2 已把 ICLR 2025 AIDE 官方预训练模型接入 Agent Harness。`Qwen3-VL-4B-Instruct` 负责规划受控 Skill，AIDE 负责输出图片 AIGC 检测分数；模型结果保存为可追溯 Observation，仍由调查员和审核员作出最终决定。模型与缓存均位于项目 `.runtime`，不会提交到 Git。
+> 当前状态：M5.2 已把 ICLR 2025 AIDE 官方预训练模型接入 Agent Harness。`Qwen3-VL-4B-Instruct` 负责规划受控 Skill，AIDE 负责输出图片 AIGC 检测分数；模型结果保存为可追溯 Observation，最终由负责调查员核验确认。模型与缓存均位于项目 `.runtime`，不会提交到 Git。
 
 首次使用 AIDE（下载约 3.59 GB 官方权重）运行：
 
@@ -59,14 +59,14 @@ OriginGuard 是一个面向内容审核与数字取证场景的 AIGC 内容真�
 - OpenAPI 与事件 JSON Schema 的初始契约
 - 架构决策记录（ADR）和基础 CI
 - Spring Security、JWT Access Token、HttpOnly Refresh Cookie 轮换
-- 调查员、审核员、管理员三角色权限与租户上下文
+- 调查员、管理员两角色权限与租户上下文
 - JPEG/PNG multipart 上传、MinIO 对象存储、租户授权预览和服务端 SHA-256 复核
 - MIME/魔数校验、图片解码、40MP 安全限制、尺寸、EXIF 摘要和 64 位感知 dHash
 - 调查案件创建、列表、详情、编辑和媒体关联
-- `DRAFT → READY → INVESTIGATING → WAITING_REVIEW` 状态推进
-- 管理员分派调查员和独立审核员，且不拥有审核决定权限
+- `DRAFT → READY → INVESTIGATING → WAITING_CONFIRMATION → COMPLETED` 状态推进
+- 管理员分派案件负责调查员，但不拥有结果确认权限
 - 调查员针对案件媒体追加人工观察证据
-- 审核任务自动创建，审核员通过或驳回后进入 `CONFIRMED` / `REJECTED`
+- 结果确认记录自动创建；确认后完成案件，证据不足时返回调查
 - 案件乐观锁、租户范围查询和追加式审计时间线
 - `AgentTask → Context Builder → Fake/Local Qwen Planner → Plan Validator → Skill → Real Media Tool → Observation → Checkpoint → Trace` 完整链路
 - 本地 Qwen3-VL 读取压缩后的案件首图与租户 RAG 上下文，输出 JSON Schema 约束的 Skill 计划
@@ -141,9 +141,9 @@ cd apps/web
 npm run dev
 ```
 
-本地租户代码为 `demo`，开发账号为 `investigator`、`reviewer`、`admin`，初始密码均为 `OriginGuard@123`。密码可通过 `ORIGINGUARD_DEMO_PASSWORD` 覆盖；这些账号不得用于生产环境。
+本地租户代码为 `demo`，开发账号为 `investigator`、`admin`，初始密码均为 `OriginGuard@123`。密码可通过 `ORIGINGUARD_DEMO_PASSWORD` 覆盖；这些账号不得用于生产环境。
 
-管理员默认不拥有 `review:approve` 或 `report:finalize`，需要参与复核的人必须单独获得审核员角色，并继续受禁止自审规则约束。实现说明见 [身份与权限基础](docs/product/identity-rbac.md)。
+管理员默认不拥有 `result:confirm` 或 `report:finalize`；Agent 结果由案件负责调查员确认。设计决策见 [ADR-007](docs/adr/ADR-007-investigator-owned-result-confirmation.md)。
 
 ## M1.2 使用流程
 
@@ -157,14 +157,14 @@ npm run dev
 随后使用三个职责分离账号完成：
 
 ```text
-admin → 为案件分派调查员与审核员
+admin → 为案件分派负责调查员
 investigator → 针对关联媒体追加人工证据 → 提交人工审核
-reviewer → 查看证据与审核任务 → 通过或填写理由驳回
+investigator → 核验 Agent 初判与证据 → 确认结果或继续补充调查
 ```
 
 新上传的 JPEG/PNG 会存入 MinIO，并可在媒体列表和案件详情中授权预览。旧版 `REGISTERED` 记录没有对应文件内容，仍会显示为不可预览。当前单文件上限 25 MB；C2PA、恶意文件扫描、视频和分片上传仍属于后续阶段。
 
-管理员可以查看和分派案件，但不能创建、调查或作出审核决定；审核员只能决定分派给自己的任务，并禁止审核自己创建或调查的案件。详细边界见 [M1.2 实现说明](docs/product/m1.2-evidence-review-workflow.md)。
+管理员可以查看和分派案件，但不能创建、调查或确认结果；只有负责调查员可以运行 Agent、形成证据并确认最终结果。
 
 ## M3.2 确定性媒体 Skill 流水线
 
@@ -176,4 +176,4 @@ Fake Planner 仍不调用 LLM，但会固定编排文件完整性、图片元数
 
 ## M3.3 Observation、正式证据与审核引用
 
-Agent 运行后，文件完整性、图片元数据、感知相似度和 AIDE 检测 Observation 会作为候选调查材料出现在案件页。分派的调查员可逐条确认纳入正式案件证据；系统保存原 Observation ID，禁止重复纳入。案件进入审核后，审核员必须勾选至少一条正式证据才能提交决定，引用关系随审核任务永久保存。实现说明见 [M3.3 Agent 证据审核闭环](docs/product/m3.3-agent-evidence-review-loop.md)。
+Agent 运行后，文件完整性、图片元数据、感知相似度和 AIDE 检测 Observation 会作为候选调查材料出现在案件页。负责调查员可逐条确认纳入正式案件证据；系统保存原 Observation ID，禁止重复纳入。案件进入结果确认后，调查员必须勾选至少一条正式证据才能确认或返回调查，引用关系随确认记录永久保存。

@@ -14,7 +14,7 @@ export function nextInvestigatorTransition(
   if (status === 'DRAFT') return { target: 'READY', label: '标记为 READY' }
   if (status === 'READY') return { target: 'INVESTIGATING', label: '开始调查' }
   if (status === 'INVESTIGATING' && canSubmit) {
-    return { target: 'WAITING_REVIEW', label: '提交人工审核' }
+    return { target: 'WAITING_CONFIRMATION', label: '提交结果确认' }
   }
   return null
 }

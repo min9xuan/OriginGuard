@@ -31,7 +31,7 @@ public class FakePlanner implements AgentPlanner {
                 new SkillSelection(
                         SkillRegistry.AIGC_DETECTION_SKILL,
                         SkillRegistry.SKILL_VERSION,
-                        "Run AIDE after CLIP media typing and interpret the score within that media domain"),
+                        "Run the generative-content detector after CLIP media typing and interpret the score within that media domain"),
                 new SkillSelection(
                         SkillRegistry.RAG_SKILL,
                         SkillRegistry.SKILL_VERSION,
@@ -40,7 +40,7 @@ public class FakePlanner implements AgentPlanner {
                 PLAN_CODE,
                 PLAN_VERSION,
                 "FAKE",
-                "CLIP media typing is ready; run the fixed deterministic evidence pipeline with type-aware AIDE interpretation",
+                "CLIP media typing is ready; run the fixed deterministic evidence pipeline with type-aware generative-content detection",
                 skills,
                 Map.of("mode", "DETERMINISTIC", "assetCount", context.assets().size()));
     }

@@ -1,7 +1,7 @@
 package com.originguard.investigation.domain;
 
-public enum ReviewStatus {
+public enum ConfirmationStatus {
     PENDING,
-    APPROVED,
-    REJECTED
+    CONFIRMED,
+    RETURNED
 }

@@ -7,8 +7,8 @@ import com.originguard.investigation.domain.EvidenceConclusion;
 import com.originguard.investigation.domain.EvidenceConfidence;
 import com.originguard.investigation.domain.InvestigationCase;
 import com.originguard.investigation.domain.InvestigationEvidence;
-import com.originguard.investigation.domain.ReviewStatus;
-import com.originguard.investigation.domain.ReviewTask;
+import com.originguard.investigation.domain.CaseDecision;
+import com.originguard.investigation.domain.ConfirmationStatus;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -45,8 +45,7 @@ public class InvestigationWorkflowController {
     @PreAuthorize("hasAuthority('case:assign')")
     public InvestigationCase assign(
             @PathVariable UUID caseId, @Valid @RequestBody AssignmentRequest request) {
-        return service.assign(
-                caseId, request.version(), request.investigatorId(), request.reviewerId());
+        return service.assign(caseId, request.version(), request.investigatorId());
     }
 
     @GetMapping("/{caseId}/workflow")
@@ -77,15 +76,15 @@ public class InvestigationWorkflowController {
                 caseId, request.observationId(), request.version()));
     }
 
-    @PostMapping("/{caseId}/reviews/{taskId}/decision")
-    @PreAuthorize("hasAnyAuthority('review:approve', 'review:reject')")
+    @PostMapping("/{caseId}/decisions/{decisionId}/confirmation")
+    @PreAuthorize("hasAuthority('result:confirm')")
     public WorkflowView decide(
             @PathVariable UUID caseId,
-            @PathVariable UUID taskId,
-            @Valid @RequestBody ReviewDecisionRequest request) {
+            @PathVariable UUID decisionId,
+            @Valid @RequestBody ResultConfirmationRequest request) {
         return WorkflowView.from(service.decide(
                 caseId,
-                taskId,
+                decisionId,
                 request.taskVersion(),
                 request.caseVersion(),
                     request.finalConclusion(),
@@ -97,7 +96,6 @@ public class InvestigationWorkflowController {
 
     public record AssignmentRequest(
             @NotNull UUID investigatorId,
-            @NotNull UUID reviewerId,
             @Min(0) long version) {}
 
     public record AddEvidenceRequest(
@@ -112,10 +110,10 @@ public class InvestigationWorkflowController {
             @NotNull UUID observationId,
             @Min(0) long version) {}
 
-    public record ReviewDecisionRequest(
+    public record ResultConfirmationRequest(
             @NotNull EvidenceConclusion finalConclusion,
             @Size(max = 2000) String reason,
-            @NotNull @Size(min = 1) List<UUID> citedEvidenceIds,
+            @NotNull @Size(max = 100) List<UUID> citedEvidenceIds,
             boolean includeAgentAssessment,
             UUID agentTaskId,
             @Min(0) long taskVersion,
@@ -123,12 +121,12 @@ public class InvestigationWorkflowController {
 
     public record WorkflowView(
             List<EvidenceView> evidence,
-            List<ReviewTaskView> reviewTasks,
+            List<CaseDecisionView> decisions,
             List<AgentEvidenceCandidate> agentEvidenceCandidates) {
         static WorkflowView from(InvestigationWorkflowService.WorkflowSnapshot snapshot) {
             return new WorkflowView(
                     snapshot.evidence().stream().map(EvidenceView::from).toList(),
-                    snapshot.reviewTasks().stream().map(ReviewTaskView::from).toList(),
+                    snapshot.decisions().stream().map(CaseDecisionView::from).toList(),
                     snapshot.agentEvidenceCandidates());
         }
     }
@@ -159,10 +157,10 @@ public class InvestigationWorkflowController {
         }
     }
 
-    public record ReviewTaskView(
+    public record CaseDecisionView(
             UUID id,
-            UUID reviewerId,
-            ReviewStatus status,
+            UUID confirmerId,
+            ConfirmationStatus status,
             EvidenceConclusion finalConclusion,
             String decisionReason,
             boolean agentAssessmentIncluded,
@@ -174,10 +172,10 @@ public class InvestigationWorkflowController {
             long version,
             Instant createdAt,
             Instant decidedAt) {
-        static ReviewTaskView from(ReviewTask task) {
-            return new ReviewTaskView(
+        static CaseDecisionView from(CaseDecision task) {
+            return new CaseDecisionView(
                     task.id(),
-                    task.reviewerId(),
+                    task.confirmerId(),
                     task.status(),
                     task.finalConclusion(),
                     task.decisionReason(),

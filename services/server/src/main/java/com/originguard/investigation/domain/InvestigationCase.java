@@ -13,7 +13,6 @@ public record InvestigationCase(
         CaseStatus status,
         UUID createdBy,
         UUID assignedInvestigatorId,
-        UUID assignedReviewerId,
         long version,
         Instant createdAt,
         Instant updatedAt) {}

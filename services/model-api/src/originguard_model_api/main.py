@@ -156,8 +156,8 @@ def health(
         "service": "originguard-model-api",
         "timestamp": datetime.now(UTC).isoformat(),
         "embeddingModelLoaded": service.loaded,
-        "aideConfigured": aide.configured,
-        "aideModelLoaded": aide.loaded,
+        "aigcDetectorConfigured": aide.configured,
+        "aigcDetectorLoaded": aide.loaded,
         "clipConfigured": clip_detector.configured,
         "clipModelLoaded": clip_detector.loaded,
     }
@@ -180,8 +180,8 @@ def list_models(
                 "device": service.device_name,
             },
             {
-                "code": "AIDE_ICLR_2025_OFFICIAL",
-                "name": "AIDE GenImage train",
+                "code": "GENERIC_AIGC_DETECTOR",
+                "name": "Multi-feature generative content detector",
                 "type": "AIGC_IMAGE_DETECTION",
                 "configured": aide.configured,
                 "loaded": aide.loaded,
@@ -227,7 +227,7 @@ async def detect_aigc_image(
 ) -> AideDetection:
     content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
     if not content_type.startswith("image/"):
-        raise HTTPException(status_code=415, detail="AIDE endpoint accepts image content only")
+        raise HTTPException(status_code=415, detail="AIGC detector accepts image content only")
     content = await request.body()
     try:
         return detector.detect(content)

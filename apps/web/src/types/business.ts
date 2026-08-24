@@ -22,9 +22,8 @@ export type CaseStatus =
   | 'DRAFT'
   | 'READY'
   | 'INVESTIGATING'
-  | 'WAITING_REVIEW'
-  | 'CONFIRMED'
-  | 'REJECTED'
+  | 'WAITING_CONFIRMATION'
+  | 'COMPLETED'
   | 'FAILED'
   | 'ARCHIVED'
 
@@ -38,7 +37,6 @@ export interface InvestigationCase {
   status: CaseStatus
   createdBy: string
   assignedInvestigatorId: string | null
-  assignedReviewerId: string | null
   version: number
   createdAt: string
   updatedAt: string
@@ -71,7 +69,7 @@ export interface AssignableUser {
   id: string
   username: string
   displayName: string
-  role: 'INVESTIGATOR' | 'REVIEWER'
+  role: 'INVESTIGATOR'
 }
 
 export type EvidenceConclusion = 'LIKELY_AUTHENTIC' | 'LIKELY_SYNTHETIC' | 'INCONCLUSIVE'
@@ -90,12 +88,12 @@ export interface InvestigationEvidence {
   createdAt: string
 }
 
-export type ReviewStatus = 'PENDING' | 'APPROVED' | 'REJECTED'
+export type ConfirmationStatus = 'PENDING' | 'CONFIRMED' | 'RETURNED'
 
-export interface ReviewTask {
+export interface CaseDecision {
   id: string
-  reviewerId: string
-  status: ReviewStatus
+  confirmerId: string
+  status: ConfirmationStatus
   finalConclusion: EvidenceConclusion | null
   decisionReason: string
   agentAssessmentIncluded: boolean
@@ -111,7 +109,7 @@ export interface ReviewTask {
 
 export interface CaseWorkflow {
   evidence: InvestigationEvidence[]
-  reviewTasks: ReviewTask[]
+  decisions: CaseDecision[]
   agentEvidenceCandidates: AgentEvidenceCandidate[]
 }
 

@@ -6,7 +6,7 @@ const auth = useAuthStore()
 const capabilities = computed(() => [
   { label: '媒体资产', value: auth.hasPermission('asset:read') ? '可访问' : '不可访问' },
   { label: '创建案件', value: auth.hasPermission('case:create') ? '可执行' : '只读/不可用' },
-  { label: '人工审核', value: auth.hasPermission('review:approve') ? '可执行' : '不可执行' },
+  { label: '结果确认', value: auth.hasPermission('result:confirm') ? '可执行' : '不可执行' },
 ])
 </script>
 

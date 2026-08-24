@@ -95,7 +95,7 @@ onMounted(load)
   <main class="page-shell" v-loading="loading">
     <header class="page-header split-header">
       <div><p class="eyebrow">M5.3 / MODEL EVALUATION</p><h1>检测模型评测</h1>
-        <p>使用带真实标签的媒体验证 AIDE，记录模型版本、错误样本并推荐可复现阈值。</p></div>
+        <p>使用带真实标签的媒体验证生成内容鉴别模型，记录模型版本、错误样本并推荐可复现阈值。</p></div>
       <el-tag type="warning" effect="plain">推荐阈值不会自动替换生产策略</el-tag>
     </header>
 
@@ -127,10 +127,10 @@ onMounted(load)
     </section>
 
     <section class="panel evaluation-run-panel">
-      <div><h2>运行 AIDE 评测</h2><p>当前阈值生成混淆矩阵；系统另外遍历样本分数推荐 F1 更优的阈值。</p></div>
+      <div><h2>运行鉴别模型评测</h2><p>当前阈值生成混淆矩阵；系统另外遍历样本分数推荐 F1 更优的阈值。</p></div>
       <div class="evaluation-run-action">
         <label>当前评测阈值 <el-input-number v-model="evaluationThreshold" :min="0" :max="1" :step="0.01" :precision="2" /></label>
-        <el-button type="success" :disabled="!canRun" :loading="running" @click="runEvaluation">批量运行评测</el-button>
+        <el-button type="primary" :disabled="!canRun" :loading="running" @click="runEvaluation">批量运行评测</el-button>
       </div>
       <el-alert v-if="!canRun" type="warning" :closable="false" title="真实与 AIGC 样本至少各需要 1 张，才能计算阈值。" />
     </section>
@@ -143,7 +143,7 @@ onMounted(load)
         <article class="panel"><span>Recall / F1</span><strong>{{ percent(latestRun.metrics.recall) }} / {{ percent(latestRun.metrics.f1) }}</strong></article>
       </section>
       <section class="panel">
-        <div class="section-heading"><div><h2>最近一次评测</h2><p>{{ latestRun.modelCode }} · {{ latestRun.modelVersion }} · {{ formatDate(latestRun.createdAt) }}</p></div></div>
+        <div class="section-heading"><div><h2>最近一次评测</h2><p>生成内容鉴别模型 · 版本 {{ latestRun.modelVersion }} · {{ formatDate(latestRun.createdAt) }}</p></div></div>
         <div class="confusion-grid">
           <div><span>TP</span><strong>{{ latestRun.metrics.truePositive }}</strong></div><div><span>TN</span><strong>{{ latestRun.metrics.trueNegative }}</strong></div>
           <div><span>FP</span><strong>{{ latestRun.metrics.falsePositive }}</strong></div><div><span>FN</span><strong>{{ latestRun.metrics.falseNegative }}</strong></div>

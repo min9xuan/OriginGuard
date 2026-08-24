@@ -52,6 +52,13 @@ export const caseApi = {
       accessToken,
     )
   },
+  prepareAgentConfirmation(caseId: string, agentTaskId: string, version: number, accessToken: string) {
+    return apiRequest<CaseDetails>(
+      `/cases/${caseId}/agent-confirmation`,
+      { method: 'POST', body: JSON.stringify({ agentTaskId, version }) },
+      accessToken,
+    )
+  },
   audit(caseId: string, accessToken: string) {
     return apiRequest<AuditEntry[]>(`/cases/${caseId}/audit`, {}, accessToken)
   },
@@ -60,7 +67,7 @@ export const caseApi = {
   },
   assign(
     caseId: string,
-    request: { investigatorId: string; reviewerId: string; version: number },
+    request: { investigatorId: string; version: number },
     accessToken: string,
   ) {
     return apiRequest<InvestigationCase>(
@@ -102,7 +109,7 @@ export const caseApi = {
       accessToken,
     )
   },
-  decideReview(
+  confirmResult(
     caseId: string,
     taskId: string,
     request: {
@@ -117,7 +124,7 @@ export const caseApi = {
     accessToken: string,
   ) {
     return apiRequest<CaseWorkflow>(
-      `/cases/${caseId}/reviews/${taskId}/decision`,
+      `/cases/${caseId}/decisions/${taskId}/confirmation`,
       { method: 'POST', body: JSON.stringify(request) },
       accessToken,
     )

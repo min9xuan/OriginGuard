@@ -10,6 +10,7 @@ $runtimeRoot = Join-Path $repositoryRoot '.runtime'
 $logRoot = Join-Path $runtimeRoot 'logs\local-stack'
 $pidRoot = Join-Path $runtimeRoot 'pids'
 $pidFile = Join-Path $pidRoot 'local-stack.json'
+$detachedInputFile = Join-Path $runtimeRoot ("detached-process-{0}.stdin" -f [Guid]::NewGuid().ToString('N'))
 $serverDirectory = Join-Path $repositoryRoot 'services\server'
 $python = Join-Path $runtimeRoot 'python\Scripts\python.exe'
 $embeddingModel = Join-Path $runtimeRoot 'models\bge-small-zh-v1.5'
@@ -23,10 +24,12 @@ $viteEntry = Join-Path $repositoryRoot 'apps\web\node_modules\vite\bin\vite.js'
 $serverJar = Join-Path $serverDirectory 'target\server-0.1.0-SNAPSHOT.jar'
 
 New-Item -ItemType Directory -Force -Path $logRoot, $pidRoot, (Join-Path $runtimeRoot 'cache\tmp') | Out-Null
+[System.IO.File]::WriteAllBytes($detachedInputFile, [byte[]]@())
 
 $state = [ordered]@{
     repositoryRoot = $repositoryRoot
     startedAt = [DateTime]::UtcNow.ToString('O')
+    detachedInputFile = $detachedInputFile
     dockerDesktopStartedByScript = $false
     processes = @()
 }
@@ -69,6 +72,7 @@ function Start-ManagedProcess(
         -ArgumentList $escapedArguments `
         -WorkingDirectory $WorkingDirectory `
         -WindowStyle Hidden `
+        -RedirectStandardInput $detachedInputFile `
         -RedirectStandardOutput $stdout `
         -RedirectStandardError $stderr `
         -PassThru

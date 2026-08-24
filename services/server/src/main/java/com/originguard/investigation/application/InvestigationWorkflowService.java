@@ -10,8 +10,8 @@ import com.originguard.investigation.domain.EvidenceConclusion;
 import com.originguard.investigation.domain.EvidenceConfidence;
 import com.originguard.investigation.domain.InvestigationCase;
 import com.originguard.investigation.domain.InvestigationEvidence;
-import com.originguard.investigation.domain.ReviewStatus;
-import com.originguard.investigation.domain.ReviewTask;
+import com.originguard.investigation.domain.CaseDecision;
+import com.originguard.investigation.domain.ConfirmationStatus;
 import com.originguard.investigation.infrastructure.InvestigationCaseRepository;
 import com.originguard.investigation.infrastructure.InvestigationWorkflowRepository;
 import com.originguard.shared.application.BusinessConflictException;
@@ -29,7 +29,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class InvestigationWorkflowService {
     private static final Set<CaseStatus> ASSIGNABLE_STATUSES = EnumSet.of(
-            CaseStatus.DRAFT, CaseStatus.READY, CaseStatus.INVESTIGATING, CaseStatus.REJECTED);
+            CaseStatus.DRAFT, CaseStatus.READY, CaseStatus.INVESTIGATING);
 
     private final InvestigationCaseRepository caseRepository;
     private final InvestigationWorkflowRepository workflowRepository;
@@ -63,23 +63,18 @@ public class InvestigationWorkflowService {
 
     @Transactional
     public InvestigationCase assign(
-            UUID caseId, long expectedVersion, UUID investigatorId, UUID reviewerId) {
+            UUID caseId, long expectedVersion, UUID investigatorId) {
         CurrentActor actor = actorProvider.getRequiredActor();
         InvestigationCase current = requireCase(actor.tenantId(), caseId);
         if (!ASSIGNABLE_STATUSES.contains(current.status())) {
             throw new BusinessConflictException(
-                    "CASE_ASSIGNMENT_NOT_ALLOWED", "Assignments cannot change while a case is under or past review");
+                    "CASE_ASSIGNMENT_NOT_ALLOWED", "Assignments cannot change while a result is awaiting confirmation or completed");
         }
         requireRole(actor.tenantId(), investigatorId, "INVESTIGATOR");
-        requireRole(actor.tenantId(), reviewerId, "REVIEWER");
-        if (investigatorId.equals(reviewerId) || reviewerId.equals(current.createdBy())) {
-            throw new BusinessConflictException(
-                    "CASE_SELF_REVIEW_NOT_ALLOWED", "The reviewer must differ from the creator and investigator");
-        }
         requireVersion(caseRepository.updateAssignment(
-                actor.tenantId(), caseId, expectedVersion, investigatorId, reviewerId));
+                actor.tenantId(), caseId, expectedVersion, investigatorId));
         workflowRepository.insertAssignment(
-                actor.tenantId(), caseId, investigatorId, reviewerId, actor.userId());
+                actor.tenantId(), caseId, investigatorId, actor.userId());
         auditService.record(
                 actor.tenantId(),
                 actor.userId(),
@@ -88,7 +83,6 @@ public class InvestigationWorkflowService {
                 caseId,
                 Map.of(
                         "investigatorId", investigatorId.toString(),
-                        "reviewerId", reviewerId.toString(),
                         "previousVersion", expectedVersion));
         return requireCase(actor.tenantId(), caseId);
     }
@@ -177,39 +171,49 @@ public class InvestigationWorkflowService {
         return evidence;
     }
 
-    public ReviewTask prepareReviewTask(InvestigationCase current, CurrentActor actor) {
+    public CaseDecision prepareDecision(InvestigationCase current, CurrentActor actor) {
         accessPolicy.requireAssignedInvestigator(current, actor);
         if (workflowRepository.countEvidence(actor.tenantId(), current.id()) == 0) {
             throw new BusinessConflictException(
-                    "CASE_EVIDENCE_REQUIRED", "At least one formal evidence record is required before review");
+                    "CASE_EVIDENCE_REQUIRED", "At least one formal evidence record is required before result confirmation");
         }
-        UUID reviewerId = current.assignedReviewerId();
-        if (reviewerId == null) {
+        return insertDecision(current, actor);
+    }
+
+    public CaseDecision prepareDecisionAfterAgent(
+            InvestigationCase current, CurrentActor actor, UUID agentTaskId) {
+        accessPolicy.requireAssignedInvestigator(current, actor);
+        workflowRepository.findCompletedAgentAssessment(actor.tenantId(), current.id(), agentTaskId)
+                .orElseThrow(() -> new BusinessConflictException(
+                        "RESULT_AGENT_TASK_INVALID",
+                        "A completed Agent assessment is required before user confirmation"));
+        return insertDecision(current, actor);
+    }
+
+    private CaseDecision insertDecision(InvestigationCase current, CurrentActor actor) {
+        UUID confirmerId = current.assignedInvestigatorId();
+        if (confirmerId == null) {
             throw new BusinessConflictException(
-                    "CASE_REVIEWER_REQUIRED", "An independent reviewer must be assigned before review");
+                    "CASE_INVESTIGATOR_REQUIRED", "An investigator must be assigned before result confirmation");
         }
-        requireRole(actor.tenantId(), reviewerId, "REVIEWER");
-        if (reviewerId.equals(current.createdBy()) || reviewerId.equals(current.assignedInvestigatorId())) {
-            throw new BusinessConflictException(
-                    "CASE_SELF_REVIEW_NOT_ALLOWED", "The reviewer must differ from the creator and investigator");
-        }
-        UUID taskId = UUID.randomUUID();
-        ReviewTask task = workflowRepository.insertReviewTask(
-                taskId, actor.tenantId(), current.id(), reviewerId, actor.userId());
+        requireRole(actor.tenantId(), confirmerId, "INVESTIGATOR");
+        UUID decisionId = UUID.randomUUID();
+        CaseDecision decision = workflowRepository.insertDecision(
+                decisionId, actor.tenantId(), current.id(), confirmerId, actor.userId());
         auditService.record(
                 actor.tenantId(),
                 actor.userId(),
-                "REVIEW_TASK_CREATED",
+                "RESULT_CONFIRMATION_CREATED",
                 InvestigationCaseService.RESOURCE_TYPE,
                 current.id(),
-                Map.of("reviewTaskId", taskId.toString(), "reviewerId", reviewerId.toString()));
-        return task;
+                Map.of("decisionId", decisionId.toString(), "confirmerId", confirmerId.toString()));
+        return decision;
     }
 
     @Transactional
     public WorkflowSnapshot decide(
             UUID caseId,
-            UUID taskId,
+            UUID decisionId,
             long expectedTaskVersion,
             long expectedCaseVersion,
             EvidenceConclusion finalConclusion,
@@ -219,24 +223,21 @@ public class InvestigationWorkflowService {
             UUID agentTaskId) {
         CurrentActor actor = actorProvider.getRequiredActor();
         InvestigationCase current = requireCase(actor.tenantId(), caseId);
-        if (current.status() != CaseStatus.WAITING_REVIEW) {
+        if (current.status() != CaseStatus.WAITING_CONFIRMATION) {
             throw new BusinessConflictException(
-                    "CASE_NOT_WAITING_REVIEW", "The case is not waiting for a review decision");
+                    "CASE_NOT_WAITING_CONFIRMATION", "The case is not waiting for investigator confirmation");
         }
-        ReviewTask task = workflowRepository.findReviewTask(actor.tenantId(), caseId, taskId)
+        CaseDecision task = workflowRepository.findDecision(actor.tenantId(), caseId, decisionId)
                 .orElseThrow(() -> new ResourceNotFoundException(
-                        "REVIEW_TASK_NOT_FOUND", "Review task was not found"));
-        if (!actor.userId().equals(task.reviewerId())) {
-            throw new AccessDeniedException("Only the assigned reviewer can decide this task");
+                        "CASE_DECISION_NOT_FOUND", "Case decision was not found"));
+        if (!actor.userId().equals(task.confirmerId())
+                || !actor.userId().equals(current.assignedInvestigatorId())) {
+            throw new AccessDeniedException("Only the assigned investigator can confirm this result");
         }
-        if (actor.userId().equals(current.createdBy())
-                || actor.userId().equals(current.assignedInvestigatorId())) {
-            throw new AccessDeniedException("A case cannot be reviewed by its creator or investigator");
-        }
-        ReviewStatus decision = finalConclusion == EvidenceConclusion.INCONCLUSIVE
-                ? ReviewStatus.REJECTED
-                : ReviewStatus.APPROVED;
-        requireDecisionPermission(actor, decision);
+        ConfirmationStatus decision = finalConclusion == EvidenceConclusion.INCONCLUSIVE
+                ? ConfirmationStatus.RETURNED
+                : ConfirmationStatus.CONFIRMED;
+        requireDecisionPermission(actor);
         String normalizedReason = reason == null ? "" : reason.trim();
         if (normalizedReason.isBlank()) {
             normalizedReason = switch (finalConclusion) {
@@ -248,32 +249,29 @@ public class InvestigationWorkflowService {
         List<UUID> normalizedEvidenceIds = citedEvidenceIds == null
                 ? List.of()
                 : citedEvidenceIds.stream().distinct().toList();
-        if (normalizedEvidenceIds.isEmpty()) {
+        if (!normalizedEvidenceIds.isEmpty()
+                && !workflowRepository.evidenceBelongsToCase(actor.tenantId(), caseId, normalizedEvidenceIds)) {
             throw new BusinessConflictException(
-                    "REVIEW_EVIDENCE_REQUIRED", "The review decision must cite at least one formal case evidence record");
-        }
-        if (!workflowRepository.evidenceBelongsToCase(actor.tenantId(), caseId, normalizedEvidenceIds)) {
-            throw new BusinessConflictException(
-                    "REVIEW_EVIDENCE_INVALID", "Cited evidence must belong to the reviewed case");
+                    "RESULT_EVIDENCE_INVALID", "Cited evidence must belong to the case");
         }
         Map<String, Object> agentAssessmentSnapshot = Map.of();
         UUID includedAgentTaskId = null;
         if (includeAgentAssessment) {
             if (agentTaskId == null) {
                 throw new BusinessConflictException(
-                        "REVIEW_AGENT_TASK_REQUIRED", "A completed Agent task must be selected for inclusion");
+                        "RESULT_AGENT_TASK_REQUIRED", "A completed Agent task must be selected for inclusion");
             }
             agentAssessmentSnapshot = workflowRepository
                     .findCompletedAgentAssessment(actor.tenantId(), caseId, agentTaskId)
                     .orElseThrow(() -> new BusinessConflictException(
-                            "REVIEW_AGENT_TASK_INVALID",
+                            "RESULT_AGENT_TASK_INVALID",
                             "The selected Agent assessment must be a completed task for this case"));
             includedAgentTaskId = agentTaskId;
         }
-        if (!workflowRepository.decideReview(
+        if (!workflowRepository.confirmDecision(
                 actor.tenantId(),
                 caseId,
-                taskId,
+                decisionId,
                 actor.userId(),
                 expectedTaskVersion,
                 decision,
@@ -282,14 +280,14 @@ public class InvestigationWorkflowService {
                 includedAgentTaskId,
                 agentAssessmentSnapshot)) {
             throw new BusinessConflictException(
-                    "REVIEW_VERSION_CONFLICT", "The review task changed; reload and retry");
+                    "DECISION_VERSION_CONFLICT", "The result confirmation changed; reload and retry");
         }
-        workflowRepository.replaceReviewEvidenceReferences(actor.tenantId(), taskId, normalizedEvidenceIds);
-        CaseStatus target = decision == ReviewStatus.APPROVED ? CaseStatus.CONFIRMED : CaseStatus.REJECTED;
+        workflowRepository.replaceDecisionEvidenceReferences(actor.tenantId(), decisionId, normalizedEvidenceIds);
+        CaseStatus target = decision == ConfirmationStatus.CONFIRMED ? CaseStatus.COMPLETED : CaseStatus.INVESTIGATING;
         requireVersion(caseRepository.updateStatus(
-                actor.tenantId(), caseId, expectedCaseVersion, CaseStatus.WAITING_REVIEW, target));
+                actor.tenantId(), caseId, expectedCaseVersion, CaseStatus.WAITING_CONFIRMATION, target));
         Map<String, Object> reviewAuditDetails = new LinkedHashMap<>();
-        reviewAuditDetails.put("reviewTaskId", taskId.toString());
+        reviewAuditDetails.put("decisionId", decisionId.toString());
         reviewAuditDetails.put("decision", decision.name());
         reviewAuditDetails.put("finalConclusion", finalConclusion.name());
         reviewAuditDetails.put("reason", normalizedReason);
@@ -301,7 +299,7 @@ public class InvestigationWorkflowService {
         auditService.record(
                 actor.tenantId(),
                 actor.userId(),
-                decision == ReviewStatus.APPROVED ? "REVIEW_APPROVED" : "REVIEW_REJECTED",
+                decision == ConfirmationStatus.CONFIRMED ? "RESULT_CONFIRMED" : "RESULT_RETURNED",
                 InvestigationCaseService.RESOURCE_TYPE,
                 caseId,
                 Map.copyOf(reviewAuditDetails));
@@ -311,14 +309,14 @@ public class InvestigationWorkflowService {
                 "CASE_STATUS_CHANGED",
                 InvestigationCaseService.RESOURCE_TYPE,
                 caseId,
-                Map.of("from", CaseStatus.WAITING_REVIEW.name(), "to", target.name()));
+                Map.of("from", CaseStatus.WAITING_CONFIRMATION.name(), "to", target.name()));
         return snapshot(actor.tenantId(), caseId);
     }
 
     private WorkflowSnapshot snapshot(UUID tenantId, UUID caseId) {
         return new WorkflowSnapshot(
                 workflowRepository.findEvidence(tenantId, caseId),
-                workflowRepository.findReviewTasks(tenantId, caseId),
+                workflowRepository.findDecisions(tenantId, caseId),
                 workflowRepository.findAgentEvidenceCandidates(tenantId, caseId));
     }
 
@@ -345,10 +343,9 @@ public class InvestigationWorkflowService {
         }
     }
 
-    private void requireDecisionPermission(CurrentActor actor, ReviewStatus decision) {
-        String permission = decision == ReviewStatus.APPROVED ? "review:approve" : "review:reject";
-        if (!actor.hasPermission(permission)) {
-            throw new AccessDeniedException("Missing permission: " + permission);
+    private void requireDecisionPermission(CurrentActor actor) {
+        if (!actor.hasPermission("result:confirm")) {
+            throw new AccessDeniedException("Missing permission: result:confirm");
         }
     }
 
@@ -361,11 +358,11 @@ public class InvestigationWorkflowService {
 
     public record WorkflowSnapshot(
             List<InvestigationEvidence> evidence,
-            List<ReviewTask> reviewTasks,
+            List<CaseDecision> decisions,
             List<AgentEvidenceCandidate> agentEvidenceCandidates) {
         public WorkflowSnapshot {
             evidence = List.copyOf(evidence);
-            reviewTasks = List.copyOf(reviewTasks);
+            decisions = List.copyOf(decisions);
             agentEvidenceCandidates = List.copyOf(agentEvidenceCandidates);
         }
     }

@@ -82,7 +82,7 @@ class LocalQwenPlannerRealModelTests {
         InvestigationCase investigationCase = new InvestigationCase(
                 UUID.randomUUID(), tenantId, "OG-TEST", "Suspicious social media image",
                 "Check the supplied image without jumping to an AIGC verdict", CasePriority.NORMAL,
-                CaseStatus.INVESTIGATING, userId, userId, null, 2, Instant.now(), Instant.now());
+                CaseStatus.INVESTIGATING, userId, userId, 2, Instant.now(), Instant.now());
         return new AgentExecutionContext(actor, investigationCase, List.of(asset), 0);
     }
 

@@ -21,7 +21,7 @@ class AgentPlanValidatorTests {
         assertThat(registry.require(SkillRegistry.AIGC_DETECTION_SKILL, SkillRegistry.SKILL_VERSION).required()).isTrue();
         assertThat(registry.require(SkillRegistry.AIGC_DETECTION_SKILL, SkillRegistry.SKILL_VERSION).instructions())
                 .isNotBlank()
-                .contains("AIDE");
+                .contains("生成内容鉴别");
     }
 
     @Test

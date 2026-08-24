@@ -72,7 +72,7 @@ class AigcEvidenceFusionTests {
         assertThat(result).containsEntry("verdict", "INCONCLUSIVE");
         assertThat(result).containsEntry("agreement", "PRIMARY_INCONCLUSIVE");
         assertThat(result).containsEntry("decisionReady", false);
-        assertThat(result.get("reasons").toString()).contains("AIDE").contains("CLIP");
+        assertThat(result.get("reasons").toString()).contains("生成内容鉴别模型").contains("CLIP");
     }
 
     @Test

@@ -22,7 +22,7 @@ public class AgentArtifactStorage {
         String objectKey = objectKey(tenantId, taskId, assetId, artifactId);
         objectStorage.put(objectKey, content, CONTENT_TYPE);
         return new StoredArtifact(
-                artifactId, "AIDE_ATTENTION_OVERLAY", CONTENT_TYPE,
+                artifactId, "AIGC_DETECTION_ATTENTION_OVERLAY", CONTENT_TYPE,
                 content.length, sha256(content));
     }
 

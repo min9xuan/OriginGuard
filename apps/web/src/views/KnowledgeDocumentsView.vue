@@ -116,6 +116,12 @@ async function createExternalDraft(candidate: RagExternalKnowledgeCandidate) {
 function sourceScopeLabel(scope: KnowledgeDocument['sourceScope']) {
   return ({ TENANT: '租户知识', BUILTIN: '系统内置', EXTERNAL: '外部学术来源' } as const)[scope]
 }
+function documentTypeLabel(type: KnowledgeDocumentType) {
+  return ({ FORENSIC_GUIDE: '取证指引', POLICY: '政策规范', MODEL_CARD: '模型卡', OTHER: '其他' } as const)[type]
+}
+function documentStatusLabel(status: KnowledgeDocument['status']) {
+  return status === 'PUBLISHED' ? '已发布' : '草稿'
+}
 function showError(error: unknown) {
   ElMessage.error(error instanceof ApiRequestError ? error.message : '知识库请求失败')
 }
@@ -183,7 +189,7 @@ onMounted(load)
           <a :href="candidate.sourceUrl" target="_blank" rel="noopener noreferrer">核对来源</a>
         </small>
         <div>
-          <el-button type="success" plain
+          <el-button type="primary" plain
             :loading="draftingCandidateId === candidate.sourceIdentifier"
             @click="createExternalDraft(candidate)">生成待审核知识草稿</el-button>
         </div>
@@ -204,7 +210,7 @@ onMounted(load)
         <p>{{ result.quote }}</p>
         <small>Hybrid {{ result.hybridScore.toFixed(4) }} · Vector {{ result.semanticScore.toFixed(4) }} · FTS {{ result.keywordScore.toFixed(4) }}</small>
         <div v-if="auth.hasPermission('knowledge:upload')">
-          <el-button text type="success" :loading="saving" @click="addEvaluationCase(result)">将此项设为期望答案</el-button>
+          <el-button text type="primary" :loading="saving" @click="addEvaluationCase(result)">将此项设为期望答案</el-button>
         </div>
       </article>
       <el-empty v-if="!searchResults.length" description="输入问题后查看实际召回结果" />
@@ -227,18 +233,23 @@ onMounted(load)
     </section>
     <section class="panel">
       <div class="section-heading"><div><h2>知识文档</h2><p>{{ documents.length }} 份当前租户文档</p></div></div>
-      <div v-for="document in documents" :key="document.id" class="observation-card">
-        <div><strong>{{ document.title }}</strong> <el-tag>{{ document.documentType }}</el-tag>
-          <el-tag type="info">{{ sourceScopeLabel(document.sourceScope) }} · 优先级 {{ document.sourcePriority }}</el-tag>
-          <el-tag :type="document.status === 'PUBLISHED' ? 'success' : 'warning'">{{ document.status }}</el-tag></div>
-        <p>发布版本 v{{ document.publishedVersion }} · 数据版本 {{ document.version }} · {{ formatDate(document.updatedAt) }}
+      <article v-for="document in documents" :key="document.id" class="knowledge-document-card">
+        <header>
+          <h3>{{ document.title }}</h3>
+          <div class="knowledge-document-tags">
+            <span>{{ documentTypeLabel(document.documentType) }}</span>
+            <span>{{ sourceScopeLabel(document.sourceScope) }} · 优先级 {{ document.sourcePriority }}</span>
+            <span :data-status="document.status">{{ documentStatusLabel(document.status) }}</span>
+          </div>
+        </header>
+        <p class="knowledge-document-meta">发布版本 v{{ document.publishedVersion }} · 数据版本 {{ document.version }} · {{ formatDate(document.updatedAt) }}
           <template v-if="document.sourceVenue"> · {{ document.sourceVenue }} {{ document.sourceYear }}</template>
           <template v-if="document.sourceUrl"> · <a :href="document.sourceUrl" target="_blank" rel="noopener noreferrer">来源页面</a></template>
         </p>
         <pre>{{ document.content }}</pre>
-        <el-button v-if="document.status === 'DRAFT' && auth.hasPermission('knowledge:publish')" type="success"
+        <el-button v-if="document.status === 'DRAFT' && auth.hasPermission('knowledge:publish')" type="primary"
           plain :loading="saving" @click="publish(document)">发布并建立索引</el-button>
-      </div><el-empty v-if="!documents.length" description="尚无知识文档" />
+      </article><el-empty v-if="!documents.length" description="尚无知识文档" />
     </section>
   </main>
 </template>
@@ -246,5 +257,14 @@ onMounted(load)
 <style scoped>
 .knowledge-expansion-filters { display: flex; flex-wrap: wrap; gap: 16px; }
 .knowledge-expansion-summary { margin: 20px 0 8px; color: #8da4ae; }
-.observation-card a { color: #48d8b0; }
+.observation-card a { color: #91aebc; }
+.knowledge-document-card { margin-top: 12px; padding: 20px 22px; border: 1px solid #2b363f; border-radius: 8px; background: #11171d; }
+.knowledge-document-card header { display: grid; gap: 12px; }
+.knowledge-document-card h3 { margin: 0; color: #e5edf0; font-size: 18px; font-weight: 650; line-height: 1.45; }
+.knowledge-document-tags { display: flex; flex-wrap: wrap; gap: 7px; }
+.knowledge-document-tags span { padding: 4px 8px; border: 1px solid #35414a; border-radius: 5px; color: #94a5ad; background: #181f26; font-size: 12px; }
+.knowledge-document-tags span[data-status="PUBLISHED"] { color: #9bc9bb; border-color: #31564c; }
+.knowledge-document-tags span[data-status="DRAFT"] { color: #cbb888; border-color: #5b5138; }
+.knowledge-document-meta { color: #7f929a; font-size: 13px; }
+.knowledge-document-card pre { max-height: 260px; }
 </style>

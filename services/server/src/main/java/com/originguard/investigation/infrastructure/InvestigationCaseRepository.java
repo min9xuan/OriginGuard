@@ -127,18 +127,15 @@ public class InvestigationCaseRepository {
             UUID tenantId,
             UUID id,
             long expectedVersion,
-            UUID investigatorId,
-            UUID reviewerId) {
+            UUID investigatorId) {
         int updated = jdbcClient.sql("""
                         UPDATE investigation_case
                         SET assigned_investigator_id = :investigatorId,
-                            assigned_reviewer_id = :reviewerId,
                             version = version + 1,
                             updated_at = CURRENT_TIMESTAMP
                         WHERE tenant_id = :tenantId AND id = :id AND version = :expectedVersion
                         """)
                 .param("investigatorId", investigatorId)
-                .param("reviewerId", reviewerId)
                 .param("tenantId", tenantId)
                 .param("id", id)
                 .param("expectedVersion", expectedVersion)
@@ -206,7 +203,6 @@ public class InvestigationCaseRepository {
                 CaseStatus.valueOf(rs.getString("status")),
                 rs.getObject("created_by", UUID.class),
                 rs.getObject("assigned_investigator_id", UUID.class),
-                rs.getObject("assigned_reviewer_id", UUID.class),
                 rs.getLong("version"),
                 rs.getTimestamp("created_at").toInstant(),
                 rs.getTimestamp("updated_at").toInstant());
@@ -227,7 +223,7 @@ public class InvestigationCaseRepository {
 
     private static final String BASE_SELECT = """
             SELECT id, tenant_id, case_number, title, description, priority, status,
-                   created_by, assigned_investigator_id, assigned_reviewer_id,
+                   created_by, assigned_investigator_id,
                    version, created_at, updated_at
             FROM investigation_case
             """;

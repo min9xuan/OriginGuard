@@ -1,21 +1,28 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus'
-import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { agentApi } from '../api/agents'
 import { caseApi } from '../api/cases'
 import { ApiRequestError } from '../api/http'
+import { mediaApi } from '../api/media'
 import { useAuthStore } from '../stores/auth'
 import type { AgentTask } from '../types/agent'
 import type { InvestigationCase } from '../types/business'
 import { formatDate } from '../utils/format'
-import { agentStatusLabel } from '../utils/presentation'
+import { agentStatusLabel, verdictLabel } from '../utils/presentation'
 
 const auth = useAuthStore()
 const router = useRouter()
+const route = useRoute()
+const routePrefix = () => route.path.startsWith('/admin') ? '/admin' : '/analyze'
 const tasks = ref<AgentTask[]>([])
 const cases = ref<InvestigationCase[]>([])
 const loading = ref(false)
+const previewingTaskId = ref('')
+const previewVisible = ref(false)
+const previewUrl = ref('')
+const previewName = ref('')
 const casesById = computed(() => new Map(cases.value.map((item) => [item.id, item])))
 
 async function load() {
@@ -35,73 +42,86 @@ async function load() {
 }
 
 function open(task: AgentTask) {
-  void router.push(`/agent-tasks/${task.id}`)
+  void router.push(`${routePrefix()}/agent-tasks/${task.id}`)
 }
 
-function openCase(caseId: string) {
-  void router.push(`/cases/${caseId}`)
+async function preview(task: AgentTask) {
+  previewingTaskId.value = task.id
+  try {
+    const details = await caseApi.get(task.caseId, auth.accessToken)
+    const asset = details.assets[0]
+    if (!asset) {
+      ElMessage.warning('这条检测记录没有可预览的图片')
+      return
+    }
+    const blob = await mediaApi.content(asset.id, auth.accessToken)
+    if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
+    previewUrl.value = URL.createObjectURL(blob)
+    previewName.value = asset.originalFilename
+    previewVisible.value = true
+  } catch (error) {
+    ElMessage.error(error instanceof ApiRequestError ? error.message : '图片预览加载失败')
+  } finally {
+    previewingTaskId.value = ''
+  }
 }
 
 function sourceCase(task: AgentTask) {
   return casesById.value.get(task.caseId)
 }
 
-function planLabel(task: AgentTask) {
-  if (!task.selectedSkillCode) return '等待生成调查方案'
-  if (task.selectedSkillCode.includes('qwen3_vl')) return '多模态模型动态规划'
-  return '固定流程规划'
-}
-
 function resultHint(task: AgentTask) {
-  if (task.status === 'COMPLETED') return '查看方案、候选观察与知识依据'
-  if (task.status === 'FAILED') return '查看失败原因和已完成步骤'
-  if (task.status === 'RUNNING') return '正在执行受控取证工具'
-  if (task.status === 'CANCELLED') return '任务已终止'
-  return '等待调查员启动'
+  if (task.status === 'COMPLETED') return verdictLabel(String(task.conclusion.verdict || 'INCONCLUSIVE'))
+  if (task.status === 'FAILED') return '分析失败'
+  if (task.status === 'RUNNING') return '正在分析'
+  if (task.status === 'CANCELLED') return '已取消'
+  return '等待开始'
 }
 
 onMounted(load)
+onBeforeUnmount(() => {
+  if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
+})
 </script>
 
 <template>
-  <main class="page-shell">
+  <main class="page-shell detection-history-page">
     <header class="page-header split-header">
       <div>
-        <p class="eyebrow">AGENT HARNESS</p>
-        <h1>Agent 取证任务</h1>
-        <p>每条任务记录一次“模型规划 → 受控工具取证 → 调查员核验”的完整过程。</p>
+        <p class="eyebrow">DETECTION HISTORY</p>
+        <h1>检测记录</h1>
+        <p>查看你上传过的图片、Agent 初步判断以及最终人工核验结果。</p>
       </div>
-      <el-tag type="success" effect="plain">结果需人工核验</el-tag>
     </header>
 
-    <section class="panel table-panel">
+    <section class="panel detection-record-panel">
       <div class="section-heading">
-        <div><h2>当前租户任务</h2><p>共 {{ tasks.length }} 个任务</p></div>
+        <div><h2>全部记录</h2><p>共 {{ tasks.length }} 次检测</p></div>
         <el-button plain :loading="loading" @click="load">刷新</el-button>
       </div>
-      <el-table :data="tasks" v-loading="loading" empty-text="还没有 Agent 任务" row-class-name="clickable-row" @row-click="open">
-        <el-table-column label="所属调查案件" min-width="220">
-          <template #default="scope">
-            <button class="agent-case-link" type="button" @click.stop="openCase(scope.row.caseId)">
-              <strong>{{ sourceCase(scope.row)?.caseNumber || '案件记录' }}</strong>
-              <span>{{ sourceCase(scope.row)?.title || scope.row.caseId }}</span>
-            </button>
-          </template>
-        </el-table-column>
-        <el-table-column prop="goal" label="任务内容" min-width="280" />
-        <el-table-column label="状态" width="130">
-          <template #default="scope"><span class="status-pill" :data-status="scope.row.status">{{ agentStatusLabel(scope.row.status) }}</span></template>
-        </el-table-column>
-        <el-table-column label="调查方式" min-width="190">
-          <template #default="scope">{{ planLabel(scope.row) }}</template>
-        </el-table-column>
-        <el-table-column label="任务产出" min-width="240">
-          <template #default="scope"><span class="task-result-hint">{{ resultHint(scope.row) }}</span></template>
-        </el-table-column>
-        <el-table-column label="创建时间" width="180">
-          <template #default="scope">{{ formatDate(scope.row.createdAt) }}</template>
-        </el-table-column>
-      </el-table>
+      <div v-loading="loading" class="detection-record-list">
+        <article v-for="task in tasks" :key="task.id" class="detection-record">
+          <div class="detection-record-main">
+            <small>{{ sourceCase(task)?.caseNumber || '检测记录' }}</small>
+            <strong>{{ sourceCase(task)?.title || '图片真实性检测' }}</strong>
+            <span>{{ formatDate(task.createdAt) }}</span>
+          </div>
+          <div class="detection-record-result">
+            <small>Agent 初步判断</small>
+            <strong>{{ resultHint(task) }}</strong>
+          </div>
+          <span class="status-pill" :data-status="task.status">{{ agentStatusLabel(task.status) }}</span>
+          <div class="detection-record-actions">
+            <el-button plain :loading="previewingTaskId === task.id" @click="preview(task)">预览图片</el-button>
+            <button type="button" class="record-open" aria-label="查看检测详情" @click="open(task)">查看结果 <span aria-hidden="true">→</span></button>
+          </div>
+        </article>
+        <el-empty v-if="!loading && !tasks.length" description="还没有检测记录" />
+      </div>
     </section>
+
+    <el-dialog v-model="previewVisible" class="image-preview-dialog" :title="previewName" width="min(900px, 92vw)" destroy-on-close>
+      <img v-if="previewUrl" :src="previewUrl" :alt="previewName" />
+    </el-dialog>
   </main>
 </template>

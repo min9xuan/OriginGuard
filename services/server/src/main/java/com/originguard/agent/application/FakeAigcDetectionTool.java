@@ -21,9 +21,9 @@ public class FakeAigcDetectionTool implements AgentTool {
                 .map(asset -> finding(asset, context.mediaTypeContexts().getOrDefault(asset.id(), Map.of())))
                 .toList();
         return Map.ofEntries(
-                Map.entry("provider", "AIDE_TEST_DOUBLE"),
+                Map.entry("provider", "AIGC_DETECTOR_TEST_DOUBLE"),
                 Map.entry("toolVersion", "1.0.0"),
-                Map.entry("model", "AIDE test double"),
+                Map.entry("model", "AIGC detector test double"),
                 Map.entry("modelVersion", "test"),
                 Map.entry("checkpointSha256", "0".repeat(64)),
                 Map.entry("device", "cpu"),
@@ -39,8 +39,8 @@ public class FakeAigcDetectionTool implements AgentTool {
         return Map.ofEntries(
                 Map.entry("assetId", asset.id().toString()),
                 Map.entry("filename", asset.originalFilename()),
-                Map.entry("provider", "AIDE_TEST_DOUBLE"),
-                Map.entry("model", "AIDE test double"),
+                Map.entry("provider", "AIGC_DETECTOR_TEST_DOUBLE"),
+                Map.entry("model", "AIGC detector test double"),
                 Map.entry("modelVersion", "test"),
                 Map.entry("checkpointSha256", "0".repeat(64)),
                 Map.entry("device", "cpu"),
