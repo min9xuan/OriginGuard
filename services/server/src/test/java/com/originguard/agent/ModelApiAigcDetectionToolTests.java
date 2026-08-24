@@ -8,6 +8,8 @@ import com.originguard.agent.application.AgentExecutionContext;
 import com.originguard.agent.application.AgentArtifactStorage;
 import com.originguard.agent.application.AigcEvidenceFusion;
 import com.originguard.agent.application.AigcResultExplainer;
+import com.originguard.agent.application.ForensicModelRegistry;
+import com.originguard.agent.application.GenericAigcModelAdapter;
 import com.originguard.agent.application.ModelApiAigcDetectionTool;
 import com.originguard.identity.domain.CurrentActor;
 import com.originguard.investigation.domain.CasePriority;
@@ -76,7 +78,8 @@ class ModelApiAigcDetectionToolTests {
                             "humanReviewRequired", true));
             ModelApiAigcDetectionTool tool = new ModelApiAigcDetectionTool(
                     media, artifacts, explainer, new AigcEvidenceFusion(),
-                    "http://127.0.0.1:" + server.getAddress().getPort(), Duration.ofSeconds(5));
+                    new ForensicModelRegistry(List.of(new GenericAigcModelAdapter(
+                            "http://127.0.0.1:" + server.getAddress().getPort(), Duration.ofSeconds(5)))));
 
             Map<String, Object> output = tool.execute(
                     context(tenantId, asset), Map.of(
@@ -87,6 +90,12 @@ class ModelApiAigcDetectionToolTests {
             assertThat(output).containsEntry("provider", "GENERIC_AIGC_DETECTOR");
             assertThat(output).containsEntry("overallClassification", "LIKELY_SYNTHETIC");
             assertThat(output).containsEntry("overallVerdict", "LIKELY_SYNTHETIC");
+            Map<String, Object> finding = (Map<String, Object>) ((List<?>) output.get("findings")).getFirst();
+            assertThat((Map<String, Object>) finding.get("modelRouting"))
+                    .containsEntry("degraded", false);
+            assertThat((Map<String, Object>) finding.get("forensicObservation"))
+                    .containsEntry("schemaVersion", "1.0.0")
+                    .containsEntry("applicability", "DIRECT");
         } finally {
             server.stop(0);
         }

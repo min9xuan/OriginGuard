@@ -343,6 +343,21 @@ public class AgentTaskService {
                     List<Map<String, Object>> findings = findings(toolOutput, "AIGC detection model");
                     for (Map<String, Object> finding : findings) {
                         UUID assetId = UUID.fromString(String.valueOf(finding.get("assetId")));
+                        Map<String, Object> routing = objectMap(finding.get("modelRouting"));
+                        if (!routing.isEmpty()) {
+                            Map<String, Object> selectedCapability = objectMap(routing.get("selectedCapability"));
+                            repository.appendStep(
+                                    actor.tenantId(), taskId, "MODEL_ROUTED", "SUCCEEDED",
+                                    skill.code(), tool.code(),
+                                    Map.of(
+                                            "assetId", assetId.toString(),
+                                            "mediaType", String.valueOf(routing.getOrDefault("mediaType", "UNKNOWN"))),
+                                    Map.of(
+                                            "message", String.valueOf(routing.getOrDefault("reason", "已完成模型路由")),
+                                            "capabilityCode", String.valueOf(selectedCapability.getOrDefault("code", "unknown")),
+                                            "capabilityName", String.valueOf(selectedCapability.getOrDefault("displayName", "取证模型")),
+                                            "degraded", Boolean.TRUE.equals(routing.get("degraded"))));
+                        }
                         AgentObservation observation = repository.insertObservation(
                                 actor.tenantId(), taskId, investigationCase.id(), assetId,
                                 evidenceTypeFor(skill.code()), aigcFindingSummary(finding), finding);
@@ -630,13 +645,17 @@ public class AgentTaskService {
     }
 
     private String aigcFindingSummary(Map<String, Object> finding) {
+        Map<String, Object> routing = objectMap(finding.get("modelRouting"));
+        String routingNote = Boolean.TRUE.equals(routing.get("degraded"))
+                ? " 当前按媒体类型降级使用通用模型，专用能力尚待接入。"
+                : " 当前已使用与媒体类型匹配的可用模型能力。";
         Object explanationValue = finding.get("explanation");
         if (explanationValue instanceof Map<?, ?> explanation) {
             Object summary = explanation.get("summary");
-            if (summary != null && !String.valueOf(summary).isBlank()) return String.valueOf(summary);
+            if (summary != null && !String.valueOf(summary).isBlank()) return String.valueOf(summary) + routingNote;
         }
         return "生成内容鉴别模型已分析“" + finding.getOrDefault("filename", "当前图片") + "”，AI 生成概率为 "
-                + percent(finding.get("syntheticProbability")) + "；该结果仍需人工复核。";
+                + percent(finding.get("syntheticProbability")) + "；该结果仍需人工复核。" + routingNote;
     }
 
     private Map<String, Object> conclusionFor(

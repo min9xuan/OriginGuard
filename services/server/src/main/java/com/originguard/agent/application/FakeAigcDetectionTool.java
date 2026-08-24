@@ -36,6 +36,25 @@ public class FakeAigcDetectionTool implements AgentTool {
     }
 
     private Map<String, Object> finding(MediaAsset asset, Map<String, Object> mediaTypeContext) {
+        Map<String, Object> capability = Map.ofEntries(
+                Map.entry("code", "aigc_detection_test_double"),
+                Map.entry("displayName", "生成内容鉴别测试替身"),
+                Map.entry("version", "test"),
+                Map.entry("purpose", "AIGC_DETECTION"),
+                Map.entry("available", true));
+        Map<String, Object> routing = Map.ofEntries(
+                Map.entry("routingVersion", "1.0.0"),
+                Map.entry("mediaKind", "IMAGE"),
+                Map.entry("mediaType", String.valueOf(mediaTypeContext.getOrDefault("mediaType", "UNKNOWN"))),
+                Map.entry("selectedCapability", capability),
+                Map.entry("recommendedUnavailable", List.of()),
+                Map.entry("degraded", false),
+                Map.entry("reason", "测试环境固定选择可重复的模型替身"));
+        Map<String, Object> fusion = Map.of(
+                "policyVersion", AigcEvidenceFusion.POLICY_VERSION,
+                "verdict", "INCONCLUSIVE", "confidence", "LOW",
+                "agreement", "PRIMARY_INCONCLUSIVE", "decisionReady", false,
+                "reasons", List.of("测试替身未形成方向性结论"), "limitations", List.of());
         return Map.ofEntries(
                 Map.entry("assetId", asset.id().toString()),
                 Map.entry("filename", asset.originalFilename()),
@@ -54,11 +73,23 @@ public class FakeAigcDetectionTool implements AgentTool {
                 Map.entry("qualityAssessment", Map.of(
                         "status", "PASS", "modelEligible", true, "qualityScore", 100, "issues", List.of())),
                 Map.entry("mediaTypeContext", mediaTypeContext),
-                Map.entry("fusion", Map.of(
-                        "policyVersion", AigcEvidenceFusion.POLICY_VERSION,
-                        "verdict", "INCONCLUSIVE", "confidence", "LOW",
-                        "agreement", "PRIMARY_INCONCLUSIVE", "decisionReady", false,
-                        "reasons", List.of("测试替身未形成方向性结论"), "limitations", List.of())),
+                Map.entry("modelRouting", routing),
+                Map.entry("fusion", fusion),
+                Map.entry("forensicObservation", Map.ofEntries(
+                        Map.entry("schemaVersion", "1.0.0"),
+                        Map.entry("capability", capability),
+                        Map.entry("assetId", asset.id().toString()),
+                        Map.entry("mediaKind", "IMAGE"),
+                        Map.entry("mediaType", routing.get("mediaType")),
+                        Map.entry("status", "SUCCEEDED"),
+                        Map.entry("applicability", "TEST_DOUBLE"),
+                        Map.entry("probabilities", Map.of("synthetic", 0.5, "authentic", 0.5)),
+                        Map.entry("verdict", "INCONCLUSIVE"),
+                        Map.entry("confidence", "LOW"),
+                        Map.entry("quality", Map.of("status", "PASS")),
+                        Map.entry("visualization", Map.of()),
+                        Map.entry("limitations", List.of("集成测试替身")),
+                        Map.entry("routing", routing))),
                 Map.entry("limitations", List.of("集成测试替身")));
     }
 }

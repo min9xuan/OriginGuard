@@ -47,6 +47,7 @@ const stepLabels: Record<string, { name: string; description: string }> = {
   SKILL_SELECTED: { name: '选择取证能力', description: '确定本轮将要执行的 Skill' },
   TOOL_CALLED: { name: '执行取证工具', description: '调用受控工具读取媒体并产生事实结果' },
   TOOL_EXECUTION_STARTED: { name: '开始执行取证能力', description: '受控工具正在处理当前媒体' },
+  MODEL_ROUTED: { name: '选择取证模型', description: '根据媒体类型与模型适用范围选择当前可执行模型' },
   KNOWLEDGE_RETRIEVAL_RECORDED: { name: '记录知识依据', description: '保存本次 RAG 检索结果和引用来源' },
   OBSERVATION_RECORDED: { name: '记录 Agent 观察', description: '将工具结果保存为待调查员确认的观察项' },
   CHECKPOINT_SAVED: { name: '保存运行检查点', description: '记录可恢复的任务执行进度' },

@@ -241,6 +241,19 @@ function fusionFor(observation: AgentObservation) {
   return objectValue(observation.payload.fusion)
 }
 
+function modelRoutingFor(observation: AgentObservation) {
+  return objectValue(observation.payload.modelRouting)
+}
+
+function selectedCapabilityFor(observation: AgentObservation) {
+  return objectValue(modelRoutingFor(observation).selectedCapability)
+}
+
+function unavailableCapabilitiesFor(observation: AgentObservation) {
+  const value = modelRoutingFor(observation).recommendedUnavailable
+  return Array.isArray(value) ? value.map(objectValue) : []
+}
+
 function qualityLabel(value: unknown) {
   return ({ PASS: '质量通过', WARN: '存在质量警告', REJECT: '输入不适用' } as Record<string, string>)[String(value)] || '尚未评估'
 }
@@ -598,6 +611,31 @@ onBeforeUnmount(() => {
             <div class="card-title-row"><strong>{{ evidenceTypeLabel(item.evidenceType) }}</strong><span>候选观察</span></div>
             <p>{{ item.summary }}</p>
             <template v-if="item.evidenceType === 'AIGC_DETECTION'">
+              <div v-if="Object.keys(modelRoutingFor(item)).length" class="model-routing-card">
+                <div class="model-routing-heading">
+                  <div>
+                    <span>本次模型路由</span>
+                    <strong>{{ selectedCapabilityFor(item).displayName || '通用生成内容鉴别' }}</strong>
+                  </div>
+                  <span :class="{ degraded: modelRoutingFor(item).degraded }">
+                    {{ modelRoutingFor(item).degraded ? '降级执行' : '直接匹配' }}
+                  </span>
+                </div>
+                <p>{{ modelRoutingFor(item).reason }}</p>
+                <dl>
+                  <div><dt>识别媒体类型</dt><dd>{{ mediaTypeLabel(mediaTypeContextFor(item)) }}</dd></div>
+                  <div><dt>能力版本</dt><dd>{{ selectedCapabilityFor(item).version || '未记录' }}</dd></div>
+                  <div><dt>标准输出</dt><dd>概率、判断、置信度、质量与可视化</dd></div>
+                </dl>
+                <div v-if="unavailableCapabilitiesFor(item).length" class="model-capability-gap">
+                  <strong>更匹配但尚未接入的能力</strong>
+                  <ul>
+                    <li v-for="capability in unavailableCapabilitiesFor(item)" :key="String(capability.code)">
+                      {{ capability.displayName }}：{{ capability.description }}
+                    </li>
+                  </ul>
+                </div>
+              </div>
               <div class="fusion-result" :data-verdict="fusionFor(item).verdict">
                 <div>
                   <span>多证据融合结果</span>

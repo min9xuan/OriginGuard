@@ -1,22 +1,13 @@
 package com.originguard.agent.application;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.originguard.media.application.MediaAssetService;
 import com.originguard.media.domain.MediaAsset;
-import java.io.IOException;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
@@ -30,26 +21,19 @@ public class ModelApiAigcDetectionTool implements AgentTool {
     private final AgentArtifactStorage artifactStorage;
     private final AigcResultExplainer resultExplainer;
     private final AigcEvidenceFusion evidenceFusion;
-    private final ObjectMapper objectMapper;
-    private final HttpClient client;
-    private final URI endpoint;
-    private final Duration timeout;
+    private final ForensicModelRegistry modelRegistry;
 
     public ModelApiAigcDetectionTool(
             MediaAssetService mediaAssetService,
             AgentArtifactStorage artifactStorage,
             AigcResultExplainer resultExplainer,
             AigcEvidenceFusion evidenceFusion,
-            @Value("${originguard.agent.aigc-detector.base-url:http://127.0.0.1:8090}") String baseUrl,
-            @Value("${originguard.agent.aigc-detector.timeout:PT10M}") Duration timeout) {
+            ForensicModelRegistry modelRegistry) {
         this.mediaAssetService = mediaAssetService;
         this.artifactStorage = artifactStorage;
         this.resultExplainer = resultExplainer;
         this.evidenceFusion = evidenceFusion;
-        this.objectMapper = new ObjectMapper();
-        this.timeout = timeout;
-        this.client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build();
-        this.endpoint = URI.create(baseUrl.replaceAll("/+$", "") + "/v1/aigc/detect");
+        this.modelRegistry = modelRegistry;
     }
 
     @Override
@@ -66,10 +50,14 @@ public class ModelApiAigcDetectionTool implements AgentTool {
             if (!asset.contentType().startsWith("image/")) continue;
             MediaAssetService.StoredMedia stored =
                     mediaAssetService.readStored(context.actor().tenantId(), asset.id());
-            Map<String, Object> detection = detect(stored.content(), asset.contentType());
-            Map<String, Object> quality = objectMap(detection.get("qualityAssessment"));
             Map<String, Object> mediaTypeContext = objectMap(mediaTypeContexts.get(asset.id().toString()));
             if (mediaTypeContext.isEmpty()) mediaTypeContext = unavailableMediaTypeContext();
+            String mediaType = String.valueOf(mediaTypeContext.getOrDefault("mediaType", "UNKNOWN"));
+            ForensicModelRegistry.ModelRoute route =
+                    modelRegistry.route(asset.contentType(), mediaType, "AIGC_DETECTION");
+            ForensicModelAdapter adapter = modelRegistry.requireAdapter(route.selected().code());
+            Map<String, Object> detection = adapter.analyze(stored.content(), asset.contentType());
+            Map<String, Object> quality = objectMap(detection.get("qualityAssessment"));
             Map<String, Object> fusion = evidenceFusion.fuse(detection, mediaTypeContext, quality);
             byte[] attentionOverlay = detection.containsKey("attentionOverlayPngBase64")
                     ? Base64.getDecoder().decode(String.valueOf(detection.get("attentionOverlayPngBase64")))
@@ -91,12 +79,15 @@ public class ModelApiAigcDetectionTool implements AgentTool {
                         "sha256", artifact.sha256()));
             }
             finding.put("mediaTypeContext", mediaTypeContext);
+            finding.put("modelRouting", route.toMap());
             finding.put("fusion", fusion);
             Map<String, Object> explanationInput = new LinkedHashMap<>(detection);
             explanationInput.put("mediaTypeContext", mediaTypeContext);
             explanationInput.put("fusion", fusion);
             finding.put("explanation", resultExplainer.explain(
                     asset.originalFilename(), stored.content(), attentionOverlay, explanationInput));
+            finding.put("forensicObservation", normalizedObservation(
+                    asset, route, detection, fusion, quality, finding.get("attentionArtifact")));
             findings.add(Map.copyOf(finding));
         }
         if (findings.isEmpty()) {
@@ -124,29 +115,37 @@ public class ModelApiAigcDetectionTool implements AgentTool {
                 .mapToDouble(Number::doubleValue)
                 .max().orElse(0.0));
         output.put("findings", List.copyOf(findings));
+        output.put("capabilityCatalog", modelRegistry.catalog());
         output.put("limitations", first.getOrDefault("limitations", List.of()));
         return Map.copyOf(output);
     }
 
-    private Map<String, Object> detect(byte[] content, String contentType) {
-        try {
-            HttpRequest request = HttpRequest.newBuilder(endpoint)
-                    .timeout(timeout)
-                    .header("Content-Type", contentType)
-                    .POST(HttpRequest.BodyPublishers.ofByteArray(content))
-                    .build();
-            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-            if (response.statusCode() != 200) {
-                throw new IllegalStateException(
-                        "AIGC detection API returned HTTP " + response.statusCode() + ": " + response.body());
-            }
-            return objectMapper.readValue(response.body(), new TypeReference<>() {});
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("AIGC detection request was interrupted", exception);
-        } catch (IOException exception) {
-            throw new IllegalStateException("AIGC detection API is unavailable at " + endpoint, exception);
-        }
+    private Map<String, Object> normalizedObservation(
+            MediaAsset asset,
+            ForensicModelRegistry.ModelRoute route,
+            Map<String, Object> detection,
+            Map<String, Object> fusion,
+            Map<String, Object> quality,
+            Object visualization) {
+        Map<String, Object> probabilities = new LinkedHashMap<>();
+        probabilities.put("synthetic", detection.getOrDefault("syntheticProbability", 0.0));
+        probabilities.put("authentic", detection.getOrDefault("authenticProbability", 0.0));
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("schemaVersion", "1.0.0");
+        result.put("capability", route.selected().toMap(true));
+        result.put("assetId", asset.id().toString());
+        result.put("mediaKind", route.mediaKind());
+        result.put("mediaType", route.mediaType());
+        result.put("status", "SUCCEEDED");
+        result.put("applicability", route.unavailableRecommended().isEmpty() ? "DIRECT" : "DEGRADED");
+        result.put("probabilities", Map.copyOf(probabilities));
+        result.put("verdict", fusion.getOrDefault("verdict", detection.getOrDefault("classification", "INCONCLUSIVE")));
+        result.put("confidence", fusion.getOrDefault("confidence", "LOW"));
+        result.put("quality", quality);
+        result.put("visualization", visualization == null ? Map.of() : visualization);
+        result.put("limitations", detection.getOrDefault("limitations", List.of()));
+        result.put("routing", route.toMap());
+        return Map.copyOf(result);
     }
 
     private String aggregateClassification(List<Map<String, Object>> findings) {

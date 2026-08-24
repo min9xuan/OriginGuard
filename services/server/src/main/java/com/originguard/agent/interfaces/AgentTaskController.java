@@ -1,6 +1,7 @@
 package com.originguard.agent.interfaces;
 
 import com.originguard.agent.application.AgentTaskService;
+import com.originguard.agent.application.ForensicModelRegistry;
 import com.originguard.agent.domain.AgentTask;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
@@ -10,6 +11,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.net.URI;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.MediaType;
@@ -26,9 +28,11 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/agent-tasks")
 public class AgentTaskController {
     private final AgentTaskService service;
+    private final ForensicModelRegistry modelRegistry;
 
-    public AgentTaskController(AgentTaskService service) {
+    public AgentTaskController(AgentTaskService service, ForensicModelRegistry modelRegistry) {
         this.service = service;
+        this.modelRegistry = modelRegistry;
     }
 
     @PostMapping
@@ -44,6 +48,12 @@ public class AgentTaskController {
     @PreAuthorize("hasAuthority('agent:trace:read')")
     public List<AgentTask> list() {
         return service.list();
+    }
+
+    @GetMapping("/model-capabilities")
+    @PreAuthorize("hasAuthority('agent:trace:read')")
+    public List<Map<String, Object>> modelCapabilities() {
+        return modelRegistry.catalog();
     }
 
     @GetMapping("/{taskId}")
