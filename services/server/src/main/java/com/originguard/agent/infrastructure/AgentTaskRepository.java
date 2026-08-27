@@ -65,6 +65,14 @@ public class AgentTaskRepository {
                 .list();
     }
 
+    public boolean delete(UUID tenantId, UUID taskId) {
+        return jdbcClient.sql("""
+                        DELETE FROM agent_task
+                        WHERE tenant_id = :tenantId AND id = :taskId AND status <> 'RUNNING'
+                        """)
+                .param("tenantId", tenantId).param("taskId", taskId).update() == 1;
+    }
+
     public boolean markRunning(UUID tenantId, UUID taskId, long expectedVersion) {
         return jdbcClient.sql("""
                         UPDATE agent_task

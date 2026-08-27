@@ -1,7 +1,7 @@
 package com.originguard.agent.application;
 
-import com.originguard.knowledge.application.KnowledgeRetriever;
 import com.originguard.knowledge.domain.KnowledgeSearchResult;
+import com.originguard.retrieval.application.RetrievalOrchestrator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -10,9 +10,9 @@ import org.springframework.stereotype.Component;
 @Component
 public class ForensicGuidanceRetrievalTool implements AgentTool {
     public static final String CODE = "rag.retrieve_forensic_guidance";
-    private final KnowledgeRetriever retriever;
+    private final RetrievalOrchestrator orchestrator;
 
-    public ForensicGuidanceRetrievalTool(KnowledgeRetriever retriever) { this.retriever = retriever; }
+    public ForensicGuidanceRetrievalTool(RetrievalOrchestrator orchestrator) { this.orchestrator = orchestrator; }
 
     @Override public String code() { return CODE; }
 
@@ -22,20 +22,33 @@ public class ForensicGuidanceRetrievalTool implements AgentTool {
         String query = String.join(" ", goal, context.investigationCase().title(),
                 context.investigationCase().description(),
                 "media integrity EXIF perceptual similarity AIGC evidence limitations review guidance");
-        List<Map<String, Object>> citations = retriever.search(context.actor().tenantId(), query, 5).stream()
+        RetrievalOrchestrator.RetrievalBundle bundle = orchestrator.retrieve(
+                new RetrievalOrchestrator.RetrievalRequest(
+                        context.actor().tenantId(), query,
+                        RetrievalOrchestrator.Profile.PROFESSIONAL_FORENSICS,
+                        context.actor().hasPermission("knowledge:read"), true, 5, 5));
+        List<Map<String, Object>> citations = bundle.localSources().stream()
                 .map(this::citation).toList();
+        List<Map<String, Object>> academicSources = bundle.webSources().stream().map(source -> Map.<String, Object>of(
+                "provider", source.provider(), "title", source.title(), "url", source.url(),
+                "snippet", source.snippet(), "score", source.score(), "venue", source.venue(),
+                "publicationYear", source.publicationYear() == null ? 0 : source.publicationYear(),
+                "qualityTier", source.qualityTier(), "qualityReason", source.qualityReason())).toList();
         Map<String, Object> output = new LinkedHashMap<>();
-        output.put("provider", "ORIGINGUARD_RAG");
-        output.put("toolVersion", "1.0.0");
-        output.put("retrievalMode", "POSTGRES_FTS_PGVECTOR_HYBRID");
-        output.put("embeddingProvider", retriever.embeddingProviderCode());
+        output.put("provider", "ORIGINGUARD_RETRIEVAL_ORCHESTRATOR");
+        output.put("toolVersion", "2.0.0");
+        output.put("retrievalMode", "LOCAL_HYBRID_PLUS_QUALITY_RANKED_ACADEMIC_WEB");
+        output.put("embeddingProvider", "KNOWLEDGE_RETRIEVER");
         output.put("query", query);
-        output.put("knowledgeAvailable", !citations.isEmpty());
+        output.put("knowledgeAvailable", !citations.isEmpty() || !academicSources.isEmpty());
         output.put("citationCount", citations.size());
         output.put("citations", citations);
+        output.put("academicSources", academicSources);
+        output.put("retrievalPolicy", bundle.policySummary());
+        output.put("influenceSummary", "检索来源只参与方案选择、适用范围和局限解释；媒体真假概率与初步结论仍只来自实际执行的检测模型和媒体证据。");
         output.put("limitations", List.of(
-                "Local deterministic hash vectors validate retrieval flow but are not production semantic embeddings",
-                "Retrieved guidance is contextual reference and is not a forensic verdict"));
+                "期刊分区随年份和评价体系变化，系统只展示可验证的来源等级，不自动宣称具体分区",
+                "检索知识是解释与规划依据，不是当前媒体真假的直接证据"));
         return Map.copyOf(output);
     }
 

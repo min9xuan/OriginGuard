@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { agentApi } from '../api/agents'
@@ -43,6 +43,20 @@ async function load() {
 
 function open(task: AgentTask) {
   void router.push(`${routePrefix()}/agent-tasks/${task.id}`)
+}
+
+async function removeTask(task: AgentTask) {
+  try {
+    await ElMessageBox.confirm('删除后，本次 Agent 的执行步骤和证据记录将无法恢复。原始上传图片不会被删除。', '删除分析任务', {
+      confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning',
+    })
+    await agentApi.remove(task.id, auth.accessToken)
+    tasks.value = tasks.value.filter(item => item.id !== task.id)
+    ElMessage.success('Agent 分析任务已删除')
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(error instanceof ApiRequestError ? error.message : '删除 Agent 任务失败')
+  }
 }
 
 async function preview(task: AgentTask) {
@@ -113,6 +127,7 @@ onBeforeUnmount(() => {
           <span class="status-pill" :data-status="task.status">{{ agentStatusLabel(task.status) }}</span>
           <div class="detection-record-actions">
             <el-button plain :loading="previewingTaskId === task.id" @click="preview(task)">预览图片</el-button>
+            <el-button plain type="danger" :disabled="task.status === 'RUNNING'" @click="removeTask(task)">删除</el-button>
             <button type="button" class="record-open" aria-label="查看检测详情" @click="open(task)">查看结果 <span aria-hidden="true">→</span></button>
           </div>
         </article>

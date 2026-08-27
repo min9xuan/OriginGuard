@@ -30,7 +30,7 @@ async function logout() {
         <RouterLink v-for="item in navigation" :key="item.path" :to="item.path" :class="{ active: route.path === item.path || (item.path !== '/admin' && route.path.startsWith(item.path)) }">{{ item.label }}</RouterLink>
       </nav>
       <div v-if="auth.user" class="sidebar-user">
-        <strong>{{ auth.user.displayName }}</strong><span>{{ auth.user.tenantCode }} · ADMIN</span>
+        <strong>{{ auth.user.displayName }}</strong><span>系统管理 · ADMIN</span>
         <el-button text @click="logout">退出登录</el-button>
       </div>
     </aside>

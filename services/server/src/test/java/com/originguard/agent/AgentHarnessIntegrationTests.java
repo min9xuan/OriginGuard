@@ -37,7 +37,9 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @SpringBootTest(properties = {
         "originguard.embedding.provider=deterministic",
         "originguard.agent.aigc-detector.provider=fake",
-        "originguard.agent.media-type-classifier.provider=fake"
+        "originguard.agent.media-type-classifier.provider=fake",
+        "originguard.assistant.llm.provider=template",
+        "originguard.assistant.web-search.provider=disabled"
 })
 @AutoConfigureMockMvc
 @ActiveProfiles("local")
@@ -71,6 +73,69 @@ class AgentHarnessIntegrationTests {
     MockMvc mockMvc;
 
     @Test
+    void conversationWorkbenchAnswersGeneralQuestionsWithoutCreatingAgentTask() throws Exception {
+        String investigator = token("investigator");
+        MvcResult created = mockMvc.perform(post("/api/v1/assistant/conversations")
+                        .header("Authorization", bearer(investigator))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"RAG 问答\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.messages.length()").value(0))
+                .andReturn();
+        String conversationId = JsonPath.read(
+                created.getResponse().getContentAsString(), "$.conversation.id");
+
+        mockMvc.perform(post("/api/v1/assistant/conversations/{id}/messages", conversationId)
+                        .header("Authorization", bearer(investigator))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"content\":\"什么是 RAG，它有什么作用？\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.messages.length()").value(2))
+                .andExpect(jsonPath("$.messages[0].messageType").value("CHAT"))
+                .andExpect(jsonPath("$.messages[1].role").value("ASSISTANT"))
+                .andExpect(jsonPath("$.messages[1].messageType").value("CHAT"))
+                .andExpect(jsonPath("$.messages[1].agentTaskId").doesNotExist())
+                .andExpect(jsonPath("$.messages[1].grounding.routeIntent").value("DIRECT_ANSWER"))
+                .andExpect(jsonPath("$.messages[1].grounding.groundingModes", hasItem("MODEL_KNOWLEDGE")))
+                .andExpect(jsonPath("$.messages[1].grounding.groundingModes", hasItem("CONVERSATION_CONTEXT")));
+    }
+
+    @Test
+    void conversationWorkbenchTurnsAttachedMediaQuestionIntoAuditableAgentTask() throws Exception {
+        String investigator = token("investigator");
+        String assetId = uploadAsset(investigator, png());
+        MvcResult created = mockMvc.perform(post("/api/v1/assistant/conversations")
+                        .header("Authorization", bearer(investigator))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"图片分析\"}"))
+                .andExpect(status().isCreated()).andReturn();
+        String conversationId = JsonPath.read(
+                created.getResponse().getContentAsString(), "$.conversation.id");
+
+        MvcResult response = mockMvc.perform(post("/api/v1/assistant/conversations/{id}/messages", conversationId)
+                        .header("Authorization", bearer(investigator))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"content":"这张图片是不是由 AI 生成的？","assetId":"%s"}
+                                """.formatted(assetId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.messages.length()").value(2))
+                .andExpect(jsonPath("$.messages[0].messageType").value("AGENT_REQUEST"))
+                .andExpect(jsonPath("$.messages[1].messageType").value("AGENT_RESULT"))
+                .andExpect(jsonPath("$.messages[1].agentTaskId").isNotEmpty())
+                .andExpect(jsonPath("$.messages[1].grounding.agentStatus").value("COMPLETED"))
+                .andExpect(jsonPath("$.messages[1].grounding.humanReviewRequired").value(true))
+                .andReturn();
+        String taskId = JsonPath.read(response.getResponse().getContentAsString(), "$.messages[1].agentTaskId");
+
+        mockMvc.perform(get("/api/v1/agent-tasks/{id}", taskId)
+                        .header("Authorization", bearer(investigator)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.task.status").value("COMPLETED"))
+                .andExpect(jsonPath("$.steps[*].stepType", hasItem("PLAN_GENERATED")));
+    }
+
+    @Test
     void fakePlannerRealMediaToolCheckpointAndTraceCompleteVerticalSlice() throws Exception {
         String admin = token("admin");
         String investigator = token("investigator");
@@ -100,7 +165,7 @@ class AgentHarnessIntegrationTests {
                 .andExpect(jsonPath("$.task.remainingStepBudget").value(0))
                 .andExpect(jsonPath("$.task.checkpointVersion").value(6))
                 .andExpect(jsonPath("$.task.conclusion.verdict").value("INCONCLUSIVE"))
-                .andExpect(jsonPath("$.steps.length()").value(47))
+                .andExpect(jsonPath("$.steps.length()").value(46))
                 .andExpect(jsonPath("$.steps[*].stepType", hasItem("PLAN_GENERATED")))
                 .andExpect(jsonPath("$.steps[*].stepType", hasItem("PLAN_VALIDATED")))
                 .andExpect(jsonPath("$.steps[*].stepType", hasItem("REPLAN_DECIDED")))
@@ -108,7 +173,6 @@ class AgentHarnessIntegrationTests {
                 .andExpect(jsonPath("$.steps[7].output.selectedSkills.length()").value(5))
                 .andExpect(jsonPath("$.steps[7].output.selectedSkills[0].reason").isNotEmpty())
                 .andExpect(jsonPath("$.steps[*].stepType", hasItem("TOOL_CALLED")))
-                .andExpect(jsonPath("$.steps[*].stepType", hasItem("MODEL_ROUTED")))
                 .andExpect(jsonPath("$.steps[*].stepType", hasItem("CHECKPOINT_SAVED")))
                 .andExpect(jsonPath("$.observations.length()").value(5))
                 .andExpect(jsonPath("$.observations[0].evidenceType").value("MEDIA_TYPE_CLASSIFICATION"))
@@ -169,7 +233,7 @@ class AgentHarnessIntegrationTests {
                         .header("Authorization", bearer(investigator)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.task.status").value("COMPLETED"))
-                .andExpect(jsonPath("$.steps.length()").value(47));
+                .andExpect(jsonPath("$.steps.length()").value(46));
 
         mockMvc.perform(get("/api/v1/cases/{id}/audit", caseId)
                         .header("Authorization", bearer(investigator)))

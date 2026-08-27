@@ -8,6 +8,9 @@ export const agentApi = {
   get(taskId: string, accessToken: string) {
     return apiRequest<AgentTaskDetails>(`/agent-tasks/${taskId}`, {}, accessToken)
   },
+  remove(taskId: string, accessToken: string) {
+    return apiRequest<void>(`/agent-tasks/${taskId}`, { method: 'DELETE' }, accessToken)
+  },
   create(caseId: string, goal: string, stepBudget: number, accessToken: string) {
     return apiRequest<AgentTaskDetails>(
       '/agent-tasks',

@@ -2,11 +2,11 @@ package com.originguard.agent.application;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.originguard.knowledge.application.KnowledgeRetriever;
 import com.originguard.knowledge.domain.KnowledgeSearchResult;
 import com.originguard.media.application.MediaAssetService;
 import com.originguard.media.domain.MediaAsset;
 import com.originguard.shared.application.BusinessConflictException;
+import com.originguard.retrieval.application.RetrievalOrchestrator;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
@@ -42,12 +42,12 @@ public class LocalQwenPlanner implements AgentPlanner {
     private final Duration timeout;
     private final int maxImageEdge;
     private final MediaAssetService mediaAssetService;
-    private final KnowledgeRetriever knowledgeRetriever;
+    private final RetrievalOrchestrator retrievalOrchestrator;
     private final SkillRegistry skillRegistry;
 
     public LocalQwenPlanner(
             MediaAssetService mediaAssetService,
-            KnowledgeRetriever knowledgeRetriever,
+            RetrievalOrchestrator retrievalOrchestrator,
             SkillRegistry skillRegistry,
             @Value("${originguard.agent.planner.base-url:http://127.0.0.1:8092}") String baseUrl,
             @Value("${originguard.agent.planner.model:qwen3-vl-4b-instruct-q4-k-m}") String model,
@@ -55,7 +55,7 @@ public class LocalQwenPlanner implements AgentPlanner {
             @Value("${originguard.agent.planner.max-image-edge:896}") int maxImageEdge) {
         this.objectMapper = new ObjectMapper();
         this.mediaAssetService = mediaAssetService;
-        this.knowledgeRetriever = knowledgeRetriever;
+        this.retrievalOrchestrator = retrievalOrchestrator;
         this.skillRegistry = skillRegistry;
         this.model = model;
         this.timeout = timeout;
@@ -248,7 +248,10 @@ public class LocalQwenPlanner implements AgentPlanner {
         String query = String.join(" ", goal, context.investigationCase().title(),
                 context.investigationCase().description(),
                 "AIGC media forensic evidence limitations skill selection review guidance");
-        return knowledgeRetriever.search(context.actor().tenantId(), query, 5);
+        return retrievalOrchestrator.retrieve(new RetrievalOrchestrator.RetrievalRequest(
+                context.actor().tenantId(), query,
+                RetrievalOrchestrator.Profile.PROFESSIONAL_FORENSICS,
+                context.actor().hasPermission("knowledge:read"), false, 5, 0)).localSources();
     }
 
     private Map<String, Object> requestBody(

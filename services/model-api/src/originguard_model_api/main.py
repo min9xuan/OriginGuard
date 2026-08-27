@@ -18,7 +18,13 @@ from torch.nn import functional
 from transformers import AutoModel, AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase
 
 from originguard_model_api.aide import AideDetection, AideDetector, LocalAideDetector
+from originguard_model_api.anime_detector import AnimeDetection, AnimeDetector, LocalAnimeDetector
 from originguard_model_api.clip_detector import ClipDetection, ClipDetector, LocalClipDetector
+from originguard_model_api.diffusion_verifier import (
+    DiffusionVerification,
+    DiffusionVerifier,
+    LocalDiffusionVerifier,
+)
 
 MODEL_CODE = "LOCAL_BGE_SMALL_ZH_V1_5"
 MODEL_NAME = "BAAI/bge-small-zh-v1.5"
@@ -123,6 +129,8 @@ class LocalBgeEmbeddingService:
 _embedding_service: EmbeddingService = LocalBgeEmbeddingService()
 _aide_detector: AideDetector = LocalAideDetector(_REPOSITORY_ROOT, _RUNTIME_ROOT)
 _clip_detector: ClipDetector = LocalClipDetector(_REPOSITORY_ROOT, _RUNTIME_ROOT)
+_anime_detector: AnimeDetector = LocalAnimeDetector(_REPOSITORY_ROOT, _RUNTIME_ROOT)
+_diffusion_verifier: DiffusionVerifier = LocalDiffusionVerifier(_REPOSITORY_ROOT, _RUNTIME_ROOT)
 
 
 def get_embedding_service() -> EmbeddingService:
@@ -137,12 +145,22 @@ def get_clip_detector() -> ClipDetector:
     return _clip_detector
 
 
+def get_anime_detector() -> AnimeDetector:
+    return _anime_detector
+
+
+def get_diffusion_verifier() -> DiffusionVerifier:
+    return _diffusion_verifier
+
+
 EmbeddingServiceDependency = Annotated[EmbeddingService, Depends(get_embedding_service)]
 AideDetectorDependency = Annotated[AideDetector, Depends(get_aide_detector)]
 ClipDetectorDependency = Annotated[ClipDetector, Depends(get_clip_detector)]
+AnimeDetectorDependency = Annotated[AnimeDetector, Depends(get_anime_detector)]
+DiffusionVerifierDependency = Annotated[DiffusionVerifier, Depends(get_diffusion_verifier)]
 
 
-app = FastAPI(title="OriginGuard Model API", version="0.7.0")
+app = FastAPI(title="OriginGuard Model API", version="0.8.0")
 
 
 @app.get("/health")
@@ -150,6 +168,8 @@ def health(
     service: EmbeddingServiceDependency,
     aide: AideDetectorDependency,
     clip_detector: ClipDetectorDependency,
+    anime_detector: AnimeDetectorDependency,
+    diffusion_verifier: DiffusionVerifierDependency,
 ) -> dict[str, object]:
     return {
         "status": "UP",
@@ -160,6 +180,10 @@ def health(
         "aigcDetectorLoaded": aide.loaded,
         "clipConfigured": clip_detector.configured,
         "clipModelLoaded": clip_detector.loaded,
+        "illustrationDetectorConfigured": anime_detector.configured,
+        "illustrationDetectorLoaded": anime_detector.loaded,
+        "diffusionVerifierConfigured": diffusion_verifier.configured,
+        "diffusionVerifierLoaded": diffusion_verifier.loaded,
     }
 
 
@@ -168,6 +192,8 @@ def list_models(
     service: EmbeddingServiceDependency,
     aide: AideDetectorDependency,
     clip_detector: ClipDetectorDependency,
+    anime_detector: AnimeDetectorDependency,
+    diffusion_verifier: DiffusionVerifierDependency,
 ) -> dict[str, list[object]]:
     return {
         "items": [
@@ -194,6 +220,21 @@ def list_models(
                 "configured": clip_detector.configured,
                 "loaded": clip_detector.loaded,
                 "device": clip_detector.device_name,
+            },
+            {
+                "code": "ILLUSTRATION_AIGC_DETECTOR",
+                "name": "Illustration and cartoon generative-content detector",
+                "type": "AIGC_IMAGE_DETECTION",
+                "configured": anime_detector.configured,
+                "loaded": anime_detector.loaded,
+                "device": anime_detector.device_name,
+            },
+            {
+                "code": "DIFFUSION_RECONSTRUCTION_VERIFIER",
+                "name": "Training-free diffusion reconstruction verifier",
+                "type": "AIGC_AUXILIARY_VERIFICATION",
+                "configured": diffusion_verifier.configured,
+                "loaded": diffusion_verifier.loaded,
             },
         ]
     }
@@ -231,6 +272,39 @@ async def detect_aigc_image(
     content = await request.body()
     try:
         return detector.detect(content)
+    except (FileNotFoundError, RuntimeError) as exception:
+        raise HTTPException(status_code=503, detail=str(exception)) from exception
+    except ValueError as exception:
+        raise HTTPException(status_code=422, detail=str(exception)) from exception
+
+
+@app.post("/v1/aigc/anime/detect", response_model=AnimeDetection)
+async def detect_anime_aigc_image(
+    request: Request,
+    detector: AnimeDetectorDependency,
+) -> AnimeDetection:
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
+    if not content_type.startswith("image/"):
+        raise HTTPException(status_code=415, detail="Illustration detector accepts image content only")
+    try:
+        return detector.detect(await request.body())
+    except (FileNotFoundError, RuntimeError) as exception:
+        raise HTTPException(status_code=503, detail=str(exception)) from exception
+    except ValueError as exception:
+        raise HTTPException(status_code=422, detail=str(exception)) from exception
+
+
+@app.post("/v1/aigc/diffusion/reconstruct", response_model=DiffusionVerification)
+async def verify_diffusion_reconstruction(
+    request: Request,
+    verifier: DiffusionVerifierDependency,
+) -> DiffusionVerification:
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
+    if not content_type.startswith("image/"):
+        raise HTTPException(status_code=415, detail="Diffusion verifier accepts image content only")
+    suffix = ".png" if content_type == "image/png" else ".webp" if content_type == "image/webp" else ".jpg"
+    try:
+        return verifier.verify(await request.body(), suffix)
     except (FileNotFoundError, RuntimeError) as exception:
         raise HTTPException(status_code=503, detail=str(exception)) from exception
     except ValueError as exception:

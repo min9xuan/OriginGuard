@@ -134,7 +134,7 @@ onBeforeUnmount(() => {
 
     <section class="panel table-panel">
       <div class="section-heading">
-        <div><h2>当前租户资产</h2><p>共 {{ assets.length }} 条记录</p></div>
+        <div><h2>媒体资产</h2><p>共 {{ assets.length }} 条记录</p></div>
         <el-button plain :loading="loading" @click="load">刷新</el-button>
       </div>
       <el-table :data="assets" v-loading="loading" empty-text="还没有媒体记录">

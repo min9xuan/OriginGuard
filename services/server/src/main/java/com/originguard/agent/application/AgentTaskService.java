@@ -106,6 +106,21 @@ public class AgentTaskService {
         return details(actor.tenantId(), taskId);
     }
 
+    @Transactional
+    public void delete(UUID taskId) {
+        CurrentActor actor = actorProvider.getRequiredActor();
+        AgentTask task = requireTask(actor.tenantId(), taskId);
+        requireTaskOwner(task, actor);
+        if (task.status() == AgentTaskStatus.RUNNING) {
+            throw new BusinessConflictException("AGENT_TASK_RUNNING", "正在运行的 Agent 任务不能删除");
+        }
+        if (!repository.delete(actor.tenantId(), taskId)) {
+            throw new BusinessConflictException("AGENT_TASK_DELETE_CONFLICT", "Agent 任务状态已变化，请刷新后重试");
+        }
+        auditService.record(actor.tenantId(), actor.userId(), "AGENT_TASK_DELETED",
+                InvestigationCaseService.RESOURCE_TYPE, task.caseId(), Map.of("agentTaskId", taskId.toString()));
+    }
+
     public AgentArtifactContent readObservationArtifact(
             UUID taskId, UUID observationId, UUID artifactId) {
         CurrentActor actor = actorProvider.getRequiredActor();
@@ -164,6 +179,7 @@ public class AgentTaskService {
             List<String> observationIds = new ArrayList<>();
             List<String> knowledgeRetrievalIds = new ArrayList<>();
             Map<String, Object> aigcDetection = Map.of();
+            Map<String, Object> retrievalEvidence = Map.of();
             int remainingBudget = running.remainingStepBudget();
             long checkpointVersion = running.checkpointVersion();
 
@@ -316,6 +332,7 @@ public class AgentTaskService {
 
                 executedSkills.add(skill.code());
                 if (SkillRegistry.RAG_SKILL.equals(skill.code())) {
+                    retrievalEvidence = toolOutput;
                     AgentKnowledgeRetrieval retrieval = repository.insertKnowledgeRetrieval(
                             actor.tenantId(), taskId, investigationCase.id(), skill.code(), tool.code(),
                             String.valueOf(toolOutput.get("query")),
@@ -343,21 +360,6 @@ public class AgentTaskService {
                     List<Map<String, Object>> findings = findings(toolOutput, "AIGC detection model");
                     for (Map<String, Object> finding : findings) {
                         UUID assetId = UUID.fromString(String.valueOf(finding.get("assetId")));
-                        Map<String, Object> routing = objectMap(finding.get("modelRouting"));
-                        if (!routing.isEmpty()) {
-                            Map<String, Object> selectedCapability = objectMap(routing.get("selectedCapability"));
-                            repository.appendStep(
-                                    actor.tenantId(), taskId, "MODEL_ROUTED", "SUCCEEDED",
-                                    skill.code(), tool.code(),
-                                    Map.of(
-                                            "assetId", assetId.toString(),
-                                            "mediaType", String.valueOf(routing.getOrDefault("mediaType", "UNKNOWN"))),
-                                    Map.of(
-                                            "message", String.valueOf(routing.getOrDefault("reason", "已完成模型路由")),
-                                            "capabilityCode", String.valueOf(selectedCapability.getOrDefault("code", "unknown")),
-                                            "capabilityName", String.valueOf(selectedCapability.getOrDefault("displayName", "取证模型")),
-                                            "degraded", Boolean.TRUE.equals(routing.get("degraded"))));
-                        }
                         AgentObservation observation = repository.insertObservation(
                                 actor.tenantId(), taskId, investigationCase.id(), assetId,
                                 evidenceTypeFor(skill.code()), aigcFindingSummary(finding), finding);
@@ -490,7 +492,7 @@ public class AgentTaskService {
 
             remainingBudget = consumeBudget(remainingBudget);
             Map<String, Object> conclusion = new LinkedHashMap<>(conclusionFor(
-                    plan, executedSkills, observationIds, knowledgeRetrievalIds, aigcDetection));
+                    plan, executedSkills, observationIds, knowledgeRetrievalIds, aigcDetection, retrievalEvidence));
             conclusion.put("executionMode", "PLAN_ACT_OBSERVE_REPLAN_STOP");
             conclusion.put("replanCount", replanCount);
             repository.appendStep(
@@ -663,7 +665,8 @@ public class AgentTaskService {
             List<String> executedSkills,
             List<String> observationIds,
             List<String> knowledgeRetrievalIds,
-            Map<String, Object> aigcDetection) {
+            Map<String, Object> aigcDetection,
+            Map<String, Object> retrievalEvidence) {
         Map<String, Object> agentAssessment = objectMap(aigcDetection.get("agentAssessment"));
         String verdict = String.valueOf(agentAssessment.getOrDefault(
                 "verdict", aigcDetection.getOrDefault("overallVerdict", "INCONCLUSIVE")));
@@ -701,6 +704,10 @@ public class AgentTaskService {
         conclusion.put("executedSkills", List.copyOf(executedSkills));
         conclusion.put("observationIds", List.copyOf(observationIds));
         conclusion.put("knowledgeRetrievalIds", List.copyOf(knowledgeRetrievalIds));
+        conclusion.put("retrievalInfluenceSummary", retrievalEvidence.getOrDefault(
+                "influenceSummary", "本次没有可用的外部检索来源影响方案或解释。"));
+        conclusion.put("retrievalPolicy", retrievalEvidence.getOrDefault("retrievalPolicy", ""));
+        conclusion.put("academicSources", retrievalEvidence.getOrDefault("academicSources", List.of()));
         conclusion.put("limitations", List.copyOf(limitations));
         return Map.copyOf(conclusion);
     }

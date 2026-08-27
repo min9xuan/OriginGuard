@@ -9,13 +9,17 @@ from originguard_model_api.aide import (
     ImageQualityAssessment,
     LocalAideDetector,
 )
+from originguard_model_api.anime_detector import AnimeDetection
 from originguard_model_api.clip_detector import ClipDetection
+from originguard_model_api.diffusion_verifier import DiffusionVerification
 from originguard_model_api.main import (
     MODEL_CODE,
     MODEL_DIMENSIONS,
     app,
     get_aide_detector,
+    get_anime_detector,
     get_clip_detector,
+    get_diffusion_verifier,
     get_embedding_service,
 )
 
@@ -99,6 +103,53 @@ class FakeClipDetector:
         )
 
 
+class FakeAnimeDetector:
+    loaded = True
+    configured = True
+    device_name = "cuda"
+
+    def detect(self, content: bytes) -> AnimeDetection:
+        return AnimeDetection(
+            provider="ILLUSTRATION_AIGC_DETECTOR",
+            model="Illustration and cartoon generative-content detector",
+            modelVersion="test",
+            checkpointSha256="b" * 64,
+            device="cuda",
+            syntheticProbability=0.87,
+            authenticProbability=0.13,
+            classification="LIKELY_SYNTHETIC",
+            syntheticThreshold=0.5,
+            authenticThreshold=0.5,
+            width=512,
+            height=512,
+            processingMilliseconds=20,
+            localizationMethod="PIXEL_LEVEL_GENERATION_MASK",
+            localizationOverlayPngBase64="bWFzaw==",
+            limitations=["测试限制"],
+        )
+
+
+class FakeDiffusionVerifier:
+    loaded = True
+    configured = True
+
+    def verify(self, content: bytes, suffix: str) -> DiffusionVerification:
+        return DiffusionVerification(
+            provider="DIFFUSION_RECONSTRUCTION_VERIFIER",
+            model="Training-free diffusion reconstruction verifier",
+            modelVersion="test",
+            status="SUCCEEDED",
+            reconstructionDistance=-0.42,
+            aerobladeScore=0.42,
+            distanceMetric="lpips_vgg_2",
+            autoencoder="test/autoencoder",
+            calibrated=False,
+            classification="INCONCLUSIVE",
+            device="cpu",
+            limitations=["测试限制"],
+        )
+
+
 def test_health() -> None:
     response = TestClient(app).get("/health")
     assert response.status_code == 200
@@ -165,3 +216,32 @@ def test_clip_media_type_contract_without_loading_model() -> None:
     assert "semanticSyntheticScore" not in response.json()
     assert response.json()["mediaType"] == "ILLUSTRATION_CARTOON"
     assert response.json()["mediaTypeLabel"] == "插画或卡通"
+
+
+def test_anime_detection_contract_without_loading_model() -> None:
+    app.dependency_overrides[get_anime_detector] = lambda: FakeAnimeDetector()
+    try:
+        response = TestClient(app).post(
+            "/v1/aigc/anime/detect", content=b"fake-image", headers={"Content-Type": "image/webp"}
+        )
+    finally:
+        app.dependency_overrides.clear()
+    assert response.status_code == 200
+    assert response.json()["provider"] == "ILLUSTRATION_AIGC_DETECTOR"
+    assert response.json()["localizationMethod"] == "PIXEL_LEVEL_GENERATION_MASK"
+
+
+def test_diffusion_verification_does_not_mislabel_distance_as_probability() -> None:
+    app.dependency_overrides[get_diffusion_verifier] = lambda: FakeDiffusionVerifier()
+    try:
+        response = TestClient(app).post(
+            "/v1/aigc/diffusion/reconstruct",
+            content=b"fake-image",
+            headers={"Content-Type": "image/png"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+    assert response.status_code == 200
+    assert response.json()["reconstructionDistance"] == -0.42
+    assert response.json()["calibrated"] is False
+    assert "syntheticProbability" not in response.json()

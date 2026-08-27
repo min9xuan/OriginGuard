@@ -83,6 +83,17 @@ public class ForensicModelRegistry {
                         "面向插画、动漫和卡通内容的专用鉴别能力。",
                         List.of("尚未接入可执行模型")),
                 new ForensicModelCapability(
+                        "diffusion_reconstruction_verification",
+                        "扩散重建痕迹复核",
+                        "planned",
+                        "DIFFUSION_RECONSTRUCTION_VERIFICATION",
+                        Set.of("IMAGE"),
+                        Set.of(ForensicModelCapability.ANY_MEDIA_TYPE),
+                        Set.of("RECONSTRUCTION_DISTANCE", "AUXILIARY_VERDICT"),
+                        50,
+                        "对疑似扩散模型生成的图像执行重建距离复核。",
+                        List.of("尚未接入可执行复核器")),
+                new ForensicModelCapability(
                         "render_aigc_detection",
                         "三维渲染生成内容鉴别",
                         "planned",

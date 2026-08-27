@@ -74,6 +74,9 @@ const replanSteps = computed(() => details.value?.steps.filter((step) =>
   ['REPLAN_DECIDED', 'REPLAN_FALLBACK'].includes(step.stepType),
 ) ?? [])
 const completedToolSteps = computed(() => details.value?.steps.filter((step) => step.stepType === 'TOOL_CALLED') ?? [])
+const modelExecutionSteps = computed(() => details.value?.steps.filter((step) => [
+  'PRIMARY_MODEL_COMPLETED', 'SECONDARY_MODEL_COMPLETED', 'EVIDENCE_FUSED', 'RESULT_EXPLAINED',
+].includes(step.stepType)) ?? [])
 const fallbackSteps = computed(() => replanSteps.value.filter((step) => step.stepType === 'REPLAN_FALLBACK'))
 const acceptedDecisionSteps = computed(() => replanSteps.value.filter((step) => step.stepType === 'REPLAN_DECIDED'))
 const planAdjustmentSummaries = computed(() => {
@@ -100,7 +103,7 @@ const currentModelState = computed(() => {
   return stepSummary(step)
 })
 const latestModelOutputStep = computed(() => [...(details.value?.steps ?? [])].reverse().find((step) =>
-  ['PLAN_GENERATED', 'REPLAN_DECIDED', 'REPLAN_FALLBACK', 'CONCLUSION_SYNTHESIZED'].includes(step.stepType) &&
+  ['PLAN_GENERATED', 'REPLAN_DECIDED', 'REPLAN_FALLBACK', 'RESULT_EXPLAINED', 'CONCLUSION_SYNTHESIZED'].includes(step.stepType) &&
   Boolean(String(step.output?.summary || step.output?.message || '').trim()),
 ))
 const latestModelOutput = computed(() => {
@@ -120,6 +123,9 @@ const conclusionLimitations = computed(() => {
   return Array.isArray(value) ? value.map((item) => localizeSystemText(String(item))) : []
 })
 const conclusionMissingEvidence = computed(() => textItems(details.value?.task.conclusion.missingEvidence))
+const retrievalInfluenceSummary = computed(() => String(details.value?.task.conclusion.retrievalInfluenceSummary || ''))
+const academicSources = computed(() => Array.isArray(details.value?.task.conclusion.academicSources)
+  ? details.value!.task.conclusion.academicSources as Array<Record<string, unknown>> : [])
 const citationCount = computed(() => details.value?.knowledgeRetrievals.reduce(
   (total, retrieval) => total + retrieval.citations.length,
   0,
@@ -241,6 +247,47 @@ function fusionFor(observation: AgentObservation) {
   return objectValue(observation.payload.fusion)
 }
 
+function secondaryVerificationFor(observation: AgentObservation) {
+  return objectValue(observation.payload.secondaryVerification)
+}
+
+function analysisStagesFor(observation: AgentObservation) {
+  const media = mediaTypeContextFor(observation)
+  const selected = selectedCapabilityFor(observation)
+  const secondary = secondaryVerificationFor(observation)
+  const secondaryStatus = String(secondary.status || 'SKIPPED')
+  const distance = typeof secondary.reconstructionDistance === 'number'
+    ? Number(secondary.reconstructionDistance).toFixed(4)
+    : ''
+  return [
+    {
+      index: '01', label: '理解图片类型', value: mediaTypeLabel(media),
+      detail: `相对匹配度 ${probabilityLabel(media.mediaTypeScore)}，仅用于选择检测能力`, state: 'complete',
+    },
+    {
+      index: '02', label: '运行主检测', value: verdictLabel(String(observation.payload.classification || 'INCONCLUSIVE')),
+      detail: `${String(selected.displayName || '通用生成内容鉴别')} · AI 生成概率 ${probabilityLabel(observation.payload.syntheticProbability)}`,
+      state: 'complete',
+    },
+    {
+      index: '03', label: '独立扩散复核',
+      value: secondaryStatus === 'SUCCEEDED' ? `重建距离 ${distance}` : secondaryStatus === 'SKIPPED' ? '本次无需追加' : '当前不可用',
+      detail: secondaryStatus === 'SUCCEEDED'
+        ? (secondary.calibrated ? '已使用校准阈值解释' : '未校准阈值，仅作为辅助信号')
+        : String(secondary.reason || '系统保留主检测结果继续分析'),
+      state: secondaryStatus === 'SUCCEEDED' ? 'complete' : 'neutral',
+    },
+    {
+      index: '04', label: '融合并解释', value: verdictLabel(String(fusionFor(observation).verdict || 'INCONCLUSIVE')),
+      detail: `融合置信度 ${confidenceLabel(fusionFor(observation).confidence)}，最终结果由你确认`, state: 'complete',
+    },
+  ]
+}
+
+function isLocalizationResult(observation: AgentObservation) {
+  return String(observation.payload.localizationMethod || '').length > 0
+}
+
 function modelRoutingFor(observation: AgentObservation) {
   return objectValue(observation.payload.modelRouting)
 }
@@ -280,6 +327,26 @@ function textItems(value: unknown) {
 
 function probabilityLabel(value: unknown) {
   return typeof value === 'number' ? `${(value * 100).toFixed(1)}%` : '未知'
+}
+
+function isModelExecutionStep(type: string) {
+  return [
+    'MODEL_ROUTING_STARTED', 'PRIMARY_MODEL_STARTED', 'PRIMARY_MODEL_COMPLETED',
+    'SECONDARY_CHECK_DECIDED', 'SECONDARY_MODEL_STARTED', 'SECONDARY_MODEL_COMPLETED',
+    'SECONDARY_MODEL_UNAVAILABLE', 'EVIDENCE_FUSION_STARTED', 'EVIDENCE_FUSED',
+    'RESULT_EXPLANATION_STARTED', 'RESULT_EXPLAINED',
+  ].includes(type)
+}
+
+function stepMetricItems(step: AgentStep) {
+  const output = step.output || {}
+  const items: Array<{ label: string; value: string }> = []
+  if (output.capabilityName) items.push({ label: '能力', value: String(output.capabilityName) })
+  if (typeof output.syntheticProbability === 'number') items.push({ label: 'AI 生成概率', value: probabilityLabel(output.syntheticProbability) })
+  if (typeof output.reconstructionDistance === 'number') items.push({ label: '重建距离', value: Number(output.reconstructionDistance).toFixed(4) })
+  if (output.verdict) items.push({ label: '融合方向', value: verdictLabel(String(output.verdict)) })
+  if (output.confidence) items.push({ label: '置信度', value: confidenceLabel(output.confidence) })
+  return items
 }
 
 function releaseVisualizations() {
@@ -425,7 +492,7 @@ function stepSummary(step: AgentStep) {
   if (step.stepType === 'PLAN_REQUESTED') return String(output.message || '规划器正在读取案件、媒体类型和取证知识')
   if (step.stepType === 'PLAN_VALIDATED') return `方案包含 ${output.selectedSkillCount ?? plannerSkills.value.length} 项取证能力，已通过安全策略校验`
   if (step.stepType === 'REPLAN_DECIDED' || step.stepType === 'REPLAN_FALLBACK') {
-    const labels: Record<string, string> = { CONTINUE: '继续原计划', REPLAN: '调整剩余计划', STOP: '停止调用工具并汇总' }
+    const labels: Record<string, string> = { CONTINUE: '按既定方案继续', REPLAN: '调整剩余计划', STOP: '停止调用工具并汇总' }
     return `${labels[String(output.action)] || '已完成动态决策'}：${String(output.summary || '未提供说明')}`
   }
   if (step.stepType === 'REPLAN_LIMIT_REACHED') return '动态决策次数已达到安全上限，Harness 将完成当前已校验计划'
@@ -433,6 +500,22 @@ function stepSummary(step: AgentStep) {
   if (step.stepType === 'SKILL_SELECTED') return String(output.reason || `选择“${skillMeta(step.skillCode).name}”`)
   if (step.stepType === 'TOOL_EXECUTION_STARTED') return String(output.message || `${skillMeta(step.skillCode).name}正在执行`)
   if (step.stepType === 'TOOL_CALLED') return `${skillMeta(step.skillCode).name}执行完成，结果已交给 Harness 处理`
+  if (step.stepType === 'MODEL_ROUTING_STARTED') return String(output.message || '正在匹配当前媒体可用的检测能力')
+  if (step.stepType === 'PRIMARY_MODEL_STARTED') return String(output.message || '主检测模型正在分析原始图片')
+  if (step.stepType === 'PRIMARY_MODEL_COMPLETED') {
+    return `${String(output.capabilityName || '主检测模型')}完成：${verdictLabel(String(output.classification || 'INCONCLUSIVE'))}，AI 生成概率 ${probabilityLabel(output.syntheticProbability)}`
+  }
+  if (step.stepType === 'SECONDARY_CHECK_DECIDED') return `${String(output.action) === 'RUN' ? '追加复核' : '跳过复核'}：${String(output.reason || output.message || '')}`
+  if (step.stepType === 'SECONDARY_MODEL_STARTED') return String(output.message || '正在执行扩散重建复核')
+  if (step.stepType === 'SECONDARY_MODEL_COMPLETED') {
+    const distance = typeof output.reconstructionDistance === 'number' ? Number(output.reconstructionDistance).toFixed(4) : '未知'
+    return `扩散重建距离 ${distance}；${output.calibrated ? '已应用校准阈值' : '尚未校准，仅作为辅助观察'}`
+  }
+  if (step.stepType === 'SECONDARY_MODEL_UNAVAILABLE') return String(output.message || '扩散复核不可用，继续使用主检测结果')
+  if (step.stepType === 'EVIDENCE_FUSION_STARTED') return String(output.message || '正在融合多源检测信号')
+  if (step.stepType === 'EVIDENCE_FUSED') return `${String(output.message || '信号融合完成')}：${verdictLabel(String(output.verdict || 'INCONCLUSIVE'))}`
+  if (step.stepType === 'RESULT_EXPLANATION_STARTED') return String(output.message || 'LLM 正在生成中文结果说明')
+  if (step.stepType === 'RESULT_EXPLAINED') return localizeSystemText(String(output.summary || output.message || '结果解释已完成'))
   if (step.stepType === 'KNOWLEDGE_RETRIEVAL_RECORDED') return `已保存 ${output.citationCount ?? 0} 条可追溯知识引用`
   if (step.stepType === 'OBSERVATION_RECORDED') return String(output.summary || '工具结果已保存为 Agent 候选观察')
   if (step.stepType === 'CHECKPOINT_SAVED') return `已保存第 ${output.checkpointVersion ?? ''} 个任务恢复点`
@@ -540,7 +623,7 @@ onBeforeUnmount(() => {
       <section class="metric-grid agent-metrics readable-metrics">
         <article class="panel accent-panel"><span>分析模型</span><strong>{{ plannerName }}</strong></article>
         <article class="panel"><span>已执行能力</span><strong>{{ completedToolSteps.length }} 项</strong></article>
-        <article class="panel"><span>分析结果</span><strong>{{ details.observations.length }} 项</strong></article>
+        <article class="panel"><span>可见模型阶段</span><strong>{{ modelExecutionSteps.length }} 个</strong></article>
         <article class="panel"><span>参考知识</span><strong>{{ citationCount }} 条</strong></article>
       </section>
 
@@ -555,6 +638,16 @@ onBeforeUnmount(() => {
           <span>需要人工复核</span>
         </div>
         <p class="conclusion-summary">{{ conclusionSummary || '本次任务没有生成文字结论。' }}</p>
+        <div v-if="retrievalInfluenceSummary" class="conclusion-limitations retrieval-impact-panel">
+          <strong>检索来源如何影响判断</strong>
+          <p>{{ retrievalInfluenceSummary }}</p>
+          <ul v-if="academicSources.length">
+            <li v-for="source in academicSources" :key="String(source.url || source.title)">
+              <a :href="String(source.url)" target="_blank" rel="noreferrer">{{ source.title }}</a>
+              <small>{{ source.venue || '学术来源' }} · {{ source.qualityReason }}</small>
+            </li>
+          </ul>
+        </div>
         <div v-if="conclusionMissingEvidence.length" class="conclusion-limitations">
           <strong>尚待补充的专用能力</strong>
           <ul><li v-for="item in conclusionMissingEvidence" :key="item">{{ item }}</li></ul>
@@ -606,12 +699,28 @@ onBeforeUnmount(() => {
 
       <section class="detail-grid agent-result-grid">
         <article class="panel">
-          <div class="section-heading"><div><h2>媒体取证观察</h2><p>工具产生的客观事实，需由调查员确认后才能纳入正式证据。</p></div></div>
+          <div class="section-heading"><div><h2>媒体取证观察</h2><p>工具产生的客观事实与模型信号，最终结果由你完成人工核验。</p></div></div>
           <div v-for="item in details.observations" :key="item.id" class="observation-card readable-card">
             <div class="card-title-row"><strong>{{ evidenceTypeLabel(item.evidenceType) }}</strong><span>候选观察</span></div>
             <p>{{ item.summary }}</p>
             <template v-if="item.evidenceType === 'AIGC_DETECTION'">
-              <div v-if="Object.keys(modelRoutingFor(item)).length" class="model-routing-card">
+              <section class="aigc-result-brief">
+                <div class="aigc-result-verdict">
+                  <span>Agent 初步方向</span>
+                  <strong>{{ verdictLabel(String(fusionFor(item).verdict || 'INCONCLUSIVE')) }}</strong>
+                  <small>融合置信度 {{ confidenceLabel(fusionFor(item).confidence) }} · 最终结果由你确认</small>
+                </div>
+                <p>{{ explanationFor(item).summary || '系统已完成模型检测，正在整理可解释说明。' }}</p>
+              </section>
+              <ol class="evidence-pipeline" aria-label="本次模型分析链路">
+                <li v-for="stage in analysisStagesFor(item)" :key="stage.index" :class="stage.state">
+                  <span>{{ stage.index }}</span>
+                  <div><small>{{ stage.label }}</small><strong>{{ stage.value }}</strong><p>{{ stage.detail }}</p></div>
+                </li>
+              </ol>
+              <details class="result-technical-details">
+                <summary>查看模型指标、路由依据与质量信息</summary>
+                <div v-if="Object.keys(modelRoutingFor(item)).length" class="model-routing-card">
                 <div class="model-routing-heading">
                   <div>
                     <span>本次模型路由</span>
@@ -655,6 +764,14 @@ onBeforeUnmount(() => {
               <p v-if="mediaTypeContextFor(item).provider === 'OPENAI_CLIP'" class="attention-notice">
                 CLIP 只在规划前识别媒体类型，供 LLM 选择取证策略并解释生成内容鉴别模型的适用边界；鉴别模型本身仍只接收原图，CLIP 类型不是 AIGC 生成概率。
               </p>
+              <div v-if="secondaryVerificationFor(item).status && secondaryVerificationFor(item).status !== 'SKIPPED'" class="fusion-reasons">
+                <strong>扩散重建复核</strong>
+                <p v-if="secondaryVerificationFor(item).status === 'SUCCEEDED'">
+                  已取得感知重建距离 {{ secondaryVerificationFor(item).reconstructionDistance }}；
+                  {{ secondaryVerificationFor(item).calibrated ? '已按校准阈值解释。' : '尚未校准阈值，因此只作为辅助观察，不作为生成概率。' }}
+                </p>
+                <p v-else>本次复核不可用，主检测结果仍会保留并交由你核验。</p>
+              </div>
               <div v-if="textItems(fusionFor(item).reasons).length" class="fusion-reasons">
                 <strong>系统为什么形成这个融合结果</strong>
                 <ul><li v-for="reason in textItems(fusionFor(item).reasons)" :key="reason">{{ reason }}</li></ul>
@@ -663,6 +780,7 @@ onBeforeUnmount(() => {
                 <strong>图像质量问题</strong>
                 <ul><li v-for="issue in qualityIssues(item)" :key="String(objectValue(issue).code)">{{ objectValue(issue).message }}</li></ul>
               </div>
+              </details>
               <div class="aide-visual-grid" v-loading="visualizationLoading[item.id]">
                 <figure>
                   <img v-if="originalUrls[item.id]" :src="originalUrls[item.id]" alt="接受生成内容鉴别分析的原始媒体" />
@@ -672,10 +790,14 @@ onBeforeUnmount(() => {
                 <figure>
                   <img v-if="attentionUrls[item.id]" :src="attentionUrls[item.id]" alt="鉴别模型语义注意力叠加图" />
                   <div v-else class="visual-placeholder">质量门控未通过或注意力图暂不可用</div>
-                  <figcaption>鉴别模型注意力叠加图</figcaption>
+                  <figcaption>{{ isLocalizationResult(item) ? '疑似生成区域定位图' : '鉴别模型注意力叠加图' }}</figcaption>
                 </figure>
               </div>
-              <p class="attention-notice">颜色越暖表示该区域对当前分类的语义贡献越高；它不是精确的 AI 生成位置或篡改位置。</p>
+              <p class="attention-notice">
+                {{ isLocalizationResult(item)
+                  ? '高亮区域来自插画/卡通专用模型的像素级响应，只表示疑似生成区域，仍需人工结合原图判断。'
+                  : '颜色越暖表示该区域对当前分类的语义贡献越高；它不是精确的 AI 生成位置或篡改位置。' }}
+              </p>
               <div class="aide-explanation">
                 <div class="card-title-row">
                   <strong>中文结果解释</strong>
@@ -797,12 +919,15 @@ onBeforeUnmount(() => {
           <li
             v-for="(step, index) in details.steps"
             :key="step.id"
-            :class="{ active: details.task.status === 'RUNNING' && index === details.steps.length - 1 }"
+            :class="{ active: details.task.status === 'RUNNING' && index === details.steps.length - 1, model: isModelExecutionStep(step.stepType) }"
           >
             <span class="live-trace-marker"></span>
             <div>
               <div><strong>{{ stepMeta(step.stepType).name }}</strong><small>{{ formatDate(step.createdAt) }}</small></div>
               <p>{{ stepSummary(step) }}</p>
+              <dl v-if="stepMetricItems(step).length" class="live-event-metrics">
+                <div v-for="metric in stepMetricItems(step)" :key="metric.label"><dt>{{ metric.label }}</dt><dd>{{ metric.value }}</dd></div>
+              </dl>
               <small v-if="step.skillCode">{{ skillMeta(step.skillCode).name }}</small>
             </div>
           </li>

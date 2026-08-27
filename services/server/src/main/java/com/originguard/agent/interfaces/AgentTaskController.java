@@ -18,6 +18,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.HttpHeaders;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -60,6 +61,13 @@ public class AgentTaskController {
     @PreAuthorize("hasAuthority('agent:trace:read')")
     public AgentTaskService.AgentTaskDetails get(@PathVariable UUID taskId) {
         return service.get(taskId);
+    }
+
+    @DeleteMapping("/{taskId}")
+    @PreAuthorize("hasAuthority('agent:run')")
+    public ResponseEntity<Void> delete(@PathVariable UUID taskId) {
+        service.delete(taskId);
+        return ResponseEntity.noContent().build();
     }
 
     @GetMapping("/{taskId}/observations/{observationId}/artifacts/{artifactId}")

@@ -17,6 +17,10 @@ $embeddingModel = Join-Path $runtimeRoot 'models\bge-small-zh-v1.5'
 $aideSource = Join-Path $runtimeRoot 'vendor\AIDE'
 $aideCheckpoint = Join-Path $runtimeRoot 'models\aide\GenImage_train.pth'
 $clipModel = Join-Path $runtimeRoot 'models\clip\ViT-B-32.pt'
+$animeSource = Join-Path $runtimeRoot 'vendor-src\AnimeDL2M\AniXplore\IMDLBenCo'
+$animeCheckpoint = Join-Path $runtimeRoot 'models\anixplore\checkpoint.pth'
+$aerobladeSource = Join-Path $runtimeRoot 'vendor-src\aeroblade'
+$aerobladeReady = Join-Path $runtimeRoot 'models\aeroblade\ready'
 $llamaServer = Join-Path $runtimeRoot 'llama.cpp\bin\llama-server.exe'
 $qwenModel = Join-Path $runtimeRoot 'models\qwen3-vl-4b-instruct-gguf\Qwen3VL-4B-Instruct-Q4_K_M.gguf'
 $qwenProjector = Join-Path $runtimeRoot 'models\qwen3-vl-4b-instruct-gguf\mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf'
@@ -195,8 +199,14 @@ try {
     $env:CLIP_DEVICE = if ($env:CLIP_DEVICE) { $env:CLIP_DEVICE } else { 'cpu' }
     $env:HF_HOME = Join-Path $runtimeRoot 'cache\huggingface'
     $env:TORCH_HOME = Join-Path $runtimeRoot 'cache\torch'
+    $env:NO_ALBUMENTATIONS_UPDATE = '1'
     $env:TEMP = Join-Path $runtimeRoot 'cache\tmp'
     $env:TMP = $env:TEMP
+    $env:ANIXPLORE_SOURCE_PATH = $animeSource
+    $env:ANIXPLORE_CHECKPOINT_PATH = $animeCheckpoint
+    $env:ANIXPLORE_DEVICE = if ($env:ANIXPLORE_DEVICE) { $env:ANIXPLORE_DEVICE } else { 'auto' }
+    $env:AEROBLADE_SOURCE_PATH = $aerobladeSource
+    $env:AEROBLADE_DEVICE = if ($env:AEROBLADE_DEVICE) { $env:AEROBLADE_DEVICE } else { 'auto' }
     $embedding = Start-ManagedProcess 'model-api' $python @(
         '-m', 'uvicorn', 'originguard_model_api.main:app',
         '--app-dir', (Join-Path $repositoryRoot 'services\model-api\src'),
@@ -218,6 +228,8 @@ try {
     $env:AGENT_PLANNER_PROVIDER = 'local-qwen'
     $env:AIGC_EXPLAINER_PROVIDER = 'local-qwen'
     $env:MEDIA_TYPE_CLASSIFIER_PROVIDER = 'model-api'
+    $env:ANIXPLORE_ENABLED = if (Test-Path -LiteralPath $animeCheckpoint -PathType Leaf) { 'true' } else { 'false' }
+    $env:AEROBLADE_ENABLED = if (Test-Path -LiteralPath $aerobladeReady -PathType Leaf) { 'true' } else { 'false' }
     $env:QWEN_VL_BASE_URL = 'http://127.0.0.1:8092'
     if (-not $SkipBackendBuild) {
         Push-Location $serverDirectory
@@ -241,7 +253,7 @@ try {
     Write-Host 'OriginGuard local stack is ready.' -ForegroundColor Green
     Write-Host '  Web:       http://127.0.0.1:5173'
     Write-Host '  Backend:   http://127.0.0.1:8080'
-    Write-Host '  Model API: http://127.0.0.1:8090 (BGE + AIDE + CLIP)'
+    Write-Host '  Model API: http://127.0.0.1:8090 (Embedding + AIGC detection + media classification)'
     Write-Host '  Qwen API:  http://127.0.0.1:8092'
     Write-Host "  Logs:      $logRoot"
     Write-Host 'Stop with: .\scripts\stop-local-stack.ps1'

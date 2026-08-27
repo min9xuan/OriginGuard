@@ -16,7 +16,7 @@ const capabilities = computed(() => [
       <div>
         <p class="eyebrow">ORIGINGUARD · M1.1</p>
         <h1>调查业务工作台</h1>
-        <p>媒体记录与案件骨架已接入身份安全链，所有数据限定在当前租户。</p>
+        <p>媒体记录与分析流程已接入身份安全链，所有数据均受当前工作空间权限边界保护。</p>
       </div>
     </header>
 

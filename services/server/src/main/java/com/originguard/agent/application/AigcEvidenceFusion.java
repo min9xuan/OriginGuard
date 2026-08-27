@@ -14,6 +14,14 @@ public class AigcEvidenceFusion {
             Map<String, Object> primary,
             Map<String, Object> mediaTypeContext,
             Map<String, Object> quality) {
+        return fuse(primary, mediaTypeContext, quality, Map.of());
+    }
+
+    public Map<String, Object> fuse(
+            Map<String, Object> primary,
+            Map<String, Object> mediaTypeContext,
+            Map<String, Object> quality,
+            Map<String, Object> secondaryVerification) {
         String qualityStatus = text(quality, "status", "PASS");
         String primaryVerdict = text(primary, "classification", "INCONCLUSIVE");
         String mediaTypeStatus = text(mediaTypeContext, "status", "UNAVAILABLE");
@@ -52,10 +60,25 @@ public class AigcEvidenceFusion {
             } else {
                 limitations.add("本次未取得 CLIP 媒体类型，无法执行面向内容域的模型路由。");
             }
-            if (!"PHOTOGRAPH".equals(mediaType)) {
+            boolean specialized = "ILLUSTRATION_AIGC_DETECTOR".equals(primary.get("provider"));
+            if (!"PHOTOGRAPH".equals(mediaType) && !specialized) {
                 limitations.add("尚未接入“" + mediaTypeLabel + "”专用 AIGC 检测模型，当前初步判断主要来自通用生成内容鉴别模型。");
             }
-            limitations.add("这是 Agent 的模型初步判断，仍需负责调查员结合证据确认。");
+            if (specialized) {
+                reasons.add("已使用匹配“" + mediaTypeLabel + "”内容域的专用模型执行检测与区域定位。");
+            }
+            limitations.add("这是 Agent 的模型初步判断，仍需由你结合证据完成最终人工核验。");
+        }
+        String secondaryStatus = text(secondaryVerification, "status", "NOT_RUN");
+        String secondaryVerdict = text(secondaryVerification, "classification", "INCONCLUSIVE");
+        if ("SUCCEEDED".equals(secondaryStatus)) {
+            if ("LIKELY_DIFFUSION_GENERATED".equals(secondaryVerdict)) {
+                reasons.add("扩散重建复核发现与扩散模型生成相符的低重建距离信号。");
+            } else if ("NO_DIFFUSION_SIGNAL".equals(secondaryVerdict)) {
+                reasons.add("扩散重建复核未发现达到已校准阈值的扩散生成信号。");
+            } else {
+                limitations.add("已取得扩散重建距离，但尚未配置验证集阈值，因此不参与方向性投票。");
+            }
         }
         if ("WARN".equals(qualityStatus)) {
             limitations.add("图像存在质量警告，模型输出需谨慎解释。");
@@ -71,7 +94,9 @@ public class AigcEvidenceFusion {
         result.put("assessmentLevel", "AGENT_PRELIMINARY");
         result.put("humanReviewRequired", true);
         result.put("recommendedDomainDetector", recommendedDomainDetector(mediaType));
-        result.put("specializedDetectorStatus", "NOT_CONFIGURED");
+        result.put("specializedDetectorStatus", "ILLUSTRATION_AIGC_DETECTOR".equals(primary.get("provider"))
+                ? "USED" : "NOT_USED");
+        result.put("secondaryVerificationStatus", secondaryStatus);
         result.put("reasons", List.copyOf(reasons));
         result.put("limitations", List.copyOf(limitations));
         return Map.copyOf(result);

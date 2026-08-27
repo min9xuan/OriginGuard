@@ -14,8 +14,9 @@ export const authApi = {
   me(accessToken: string) {
     return apiRequest<AuthenticatedUser>('/auth/me', {}, accessToken)
   },
-  logout(accessToken: string) {
-    return apiRequest<void>('/auth/logout', { method: 'POST' }, accessToken)
+  logout() {
+    // The refresh cookie is the session being revoked. Do not attach a possibly expired
+    // access token, otherwise the security filter may reject the request before cookie clearing.
+    return apiRequest<void>('/auth/logout', { method: 'POST' })
   },
 }
-

@@ -47,7 +47,7 @@ onMounted(load)
       <el-table
         :data="cases"
         v-loading="loading"
-        empty-text="当前租户还没有案件"
+        empty-text="当前还没有分析记录"
         row-class-name="clickable-row"
         @row-click="(row: InvestigationCase) => router.push(casePath(row.id))"
       >

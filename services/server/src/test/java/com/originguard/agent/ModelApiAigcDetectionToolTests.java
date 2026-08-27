@@ -1,10 +1,15 @@
 package com.originguard.agent;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.originguard.agent.application.AgentExecutionContext;
+import com.originguard.agent.application.AgentExecutionEventRecorder;
 import com.originguard.agent.application.AgentArtifactStorage;
 import com.originguard.agent.application.AigcEvidenceFusion;
 import com.originguard.agent.application.AigcResultExplainer;
@@ -57,6 +62,7 @@ class ModelApiAigcDetectionToolTests {
             MediaAssetService media = mock(MediaAssetService.class);
             AgentArtifactStorage artifacts = mock(AgentArtifactStorage.class);
             AigcResultExplainer explainer = mock(AigcResultExplainer.class);
+            AgentExecutionEventRecorder events = mock(AgentExecutionEventRecorder.class);
             when(media.readStored(tenantId, assetId))
                     .thenReturn(new MediaAssetService.StoredMedia(asset, mediaObject, new byte[] {1, 2, 3}));
             when(artifacts.storeAttentionOverlay(org.mockito.ArgumentMatchers.eq(tenantId),
@@ -79,7 +85,8 @@ class ModelApiAigcDetectionToolTests {
             ModelApiAigcDetectionTool tool = new ModelApiAigcDetectionTool(
                     media, artifacts, explainer, new AigcEvidenceFusion(),
                     new ForensicModelRegistry(List.of(new GenericAigcModelAdapter(
-                            "http://127.0.0.1:" + server.getAddress().getPort(), Duration.ofSeconds(5)))));
+                            "http://127.0.0.1:" + server.getAddress().getPort(), Duration.ofSeconds(5)))),
+                    events);
 
             Map<String, Object> output = tool.execute(
                     context(tenantId, asset), Map.of(
@@ -96,6 +103,12 @@ class ModelApiAigcDetectionToolTests {
             assertThat((Map<String, Object>) finding.get("forensicObservation"))
                     .containsEntry("schemaVersion", "1.0.0")
                     .containsEntry("applicability", "DIRECT");
+            verify(events).recordAigc(any(), any(), eq("MODEL_ROUTING_STARTED"), anyMap(), anyMap());
+            verify(events).recordAigc(any(), any(), eq("PRIMARY_MODEL_STARTED"), anyMap(), anyMap());
+            verify(events).recordAigc(any(), any(), eq("PRIMARY_MODEL_COMPLETED"), anyMap(), anyMap());
+            verify(events).recordAigc(any(), any(), eq("SECONDARY_CHECK_DECIDED"), anyMap(), anyMap());
+            verify(events).recordAigc(any(), any(), eq("EVIDENCE_FUSED"), anyMap(), anyMap());
+            verify(events).recordAigc(any(), any(), eq("RESULT_EXPLAINED"), anyMap(), anyMap());
         } finally {
             server.stop(0);
         }

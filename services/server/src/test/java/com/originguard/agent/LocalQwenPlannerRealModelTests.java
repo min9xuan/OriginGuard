@@ -13,11 +13,11 @@ import com.originguard.identity.domain.CurrentActor;
 import com.originguard.investigation.domain.CasePriority;
 import com.originguard.investigation.domain.CaseStatus;
 import com.originguard.investigation.domain.InvestigationCase;
-import com.originguard.knowledge.application.KnowledgeRetriever;
 import com.originguard.knowledge.domain.KnowledgeSearchResult;
 import com.originguard.media.application.MediaAssetService;
 import com.originguard.media.domain.MediaAsset;
 import com.originguard.media.domain.MediaObject;
+import com.originguard.retrieval.application.RetrievalOrchestrator;
 import java.awt.Color;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
@@ -47,18 +47,21 @@ class LocalQwenPlannerRealModelTests {
         when(media.readStored(tenantId, assetId))
                 .thenReturn(new MediaAssetService.StoredMedia(asset, object, image()));
 
-        KnowledgeRetriever knowledge = mock(KnowledgeRetriever.class);
-        when(knowledge.search(org.mockito.ArgumentMatchers.eq(tenantId),
-                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.eq(5)))
-                .thenReturn(List.of(new KnowledgeSearchResult(
-                        UUID.randomUUID(), "AIGC media review guidance", "FORENSIC_GUIDE", 1,
-                        UUID.randomUUID(), 0,
-                        "Metadata and visual appearance are supporting facts, not a standalone verdict.",
-                        0.8, 0.7, 0.78)));
+        KnowledgeSearchResult guidance = new KnowledgeSearchResult(
+                UUID.randomUUID(), "AIGC media review guidance", "FORENSIC_GUIDE", 1,
+                UUID.randomUUID(), 0,
+                "Metadata and visual appearance are supporting facts, not a standalone verdict.",
+                0.8, 0.7, 0.78);
+        RetrievalOrchestrator retrieval = mock(RetrievalOrchestrator.class);
+        when(retrieval.retrieve(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(new RetrievalOrchestrator.RetrievalBundle(
+                        List.of(guidance), List.of(), "NOT_REQUESTED",
+                        RetrievalOrchestrator.Profile.PROFESSIONAL_FORENSICS,
+                        "Use published forensic guidance."));
 
         SkillRegistry skills = new SkillRegistry();
         LocalQwenPlanner planner = new LocalQwenPlanner(
-                media, knowledge, skills,
+                media, retrieval, skills,
                 System.getenv().getOrDefault("QWEN_VL_BASE_URL", "http://127.0.0.1:8092"),
                 "qwen3-vl-4b-instruct-q4-k-m", Duration.ofMinutes(5), 256);
         AgentPlanner.PlannerPlan plan = planner.plan(context(tenantId, asset),

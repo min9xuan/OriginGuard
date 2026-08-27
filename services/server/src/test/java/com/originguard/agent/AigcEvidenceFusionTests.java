@@ -3,6 +3,7 @@ package com.originguard.agent;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.originguard.agent.application.AigcEvidenceFusion;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
@@ -84,6 +85,23 @@ class AigcEvidenceFusionTests {
 
         assertThat(result).containsEntry("verdict", "UNSUPPORTED_INPUT");
         assertThat(result).containsEntry("confidence", "UNAVAILABLE");
+    }
+
+    @Test
+    void recordsSpecializedCartoonDetectionAndUncalibratedDiffusionObservation() {
+        Map<String, Object> specialized = new LinkedHashMap<>(primary("LIKELY_SYNTHETIC", 0.82));
+        specialized.put("provider", "ILLUSTRATION_AIGC_DETECTOR");
+
+        Map<String, Object> result = fusion.fuse(
+                Map.copyOf(specialized),
+                mediaType("ILLUSTRATION_CARTOON", "插画或卡通"),
+                quality("PASS"),
+                Map.of("status", "SUCCEEDED", "classification", "INCONCLUSIVE", "calibrated", false));
+
+        assertThat(result).containsEntry("specializedDetectorStatus", "USED");
+        assertThat(result).containsEntry("secondaryVerificationStatus", "SUCCEEDED");
+        assertThat(result.get("reasons").toString()).contains("专用模型");
+        assertThat(result.get("limitations").toString()).contains("尚未配置验证集阈值");
     }
 
     private Map<String, Object> primary(String classification, double syntheticProbability) {

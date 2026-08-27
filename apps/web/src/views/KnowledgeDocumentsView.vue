@@ -114,7 +114,7 @@ async function createExternalDraft(candidate: RagExternalKnowledgeCandidate) {
   } catch (error) { showError(error) } finally { draftingCandidateId.value = '' }
 }
 function sourceScopeLabel(scope: KnowledgeDocument['sourceScope']) {
-  return ({ TENANT: '租户知识', BUILTIN: '系统内置', EXTERNAL: '外部学术来源' } as const)[scope]
+  return ({ TENANT: '用户知识', BUILTIN: '系统内置', EXTERNAL: '外部学术来源' } as const)[scope]
 }
 function documentTypeLabel(type: KnowledgeDocumentType) {
   return ({ FORENSIC_GUIDE: '取证指引', POLICY: '政策规范', MODEL_CARD: '模型卡', OTHER: '其他' } as const)[type]
@@ -131,7 +131,7 @@ onMounted(load)
 <template>
   <main class="page-shell" v-loading="loading">
     <header class="page-header"><p class="eyebrow">M4.1 / RAG KNOWLEDGE</p><h1>取证知识库</h1>
-      <p>只有已发布版本会进入租户内的全文检索与 pgvector 混合召回。</p></header>
+      <p>只有已发布版本会进入当前工作空间的全文检索与 pgvector 混合召回。</p></header>
     <section v-if="auth.hasPermission('knowledge:upload')" class="panel">
       <div class="section-heading"><div><h2>新建知识草稿</h2><p>支持 Markdown 或纯文本；发布后自动切片与向量化</p></div></div>
       <el-button v-if="auth.hasPermission('knowledge:publish')" plain :loading="saving" @click="reindex">
@@ -220,7 +220,7 @@ onMounted(load)
       <div v-if="evaluationRun" class="metric-grid">
         <article class="panel"><span>Recall@{{ evaluationRun.topK }}</span><strong>{{ evaluationRun.recallAtK.toFixed(3) }}</strong></article>
         <article class="panel"><span>MRR</span><strong>{{ evaluationRun.mrr.toFixed(3) }}</strong></article>
-        <article class="panel"><span>租户 / 草稿过滤</span><strong>{{ evaluationRun.tenantIsolationPassed && evaluationRun.draftExclusionPassed ? 'PASS' : 'FAIL' }}</strong></article>
+        <article class="panel"><span>数据隔离 / 草稿过滤</span><strong>{{ evaluationRun.tenantIsolationPassed && evaluationRun.draftExclusionPassed ? 'PASS' : 'FAIL' }}</strong></article>
         <article class="panel"><span>Citation 完整性</span><strong>{{ evaluationRun.citationIntegrityPassed ? 'PASS' : 'FAIL' }}</strong></article>
       </div>
       <article v-for="item in evaluationRun?.caseResults ?? []" :key="item.evaluationCaseId" class="checkpoint-card">
@@ -232,7 +232,7 @@ onMounted(load)
       </article>
     </section>
     <section class="panel">
-      <div class="section-heading"><div><h2>知识文档</h2><p>{{ documents.length }} 份当前租户文档</p></div></div>
+      <div class="section-heading"><div><h2>知识文档</h2><p>{{ documents.length }} 份当前知识文档</p></div></div>
       <article v-for="document in documents" :key="document.id" class="knowledge-document-card">
         <header>
           <h3>{{ document.title }}</h3>
@@ -246,7 +246,10 @@ onMounted(load)
           <template v-if="document.sourceVenue"> · {{ document.sourceVenue }} {{ document.sourceYear }}</template>
           <template v-if="document.sourceUrl"> · <a :href="document.sourceUrl" target="_blank" rel="noopener noreferrer">来源页面</a></template>
         </p>
-        <pre>{{ document.content }}</pre>
+        <details class="knowledge-document-content">
+          <summary>查看文档正文</summary>
+          <div>{{ document.content }}</div>
+        </details>
         <el-button v-if="document.status === 'DRAFT' && auth.hasPermission('knowledge:publish')" type="primary"
           plain :loading="saving" @click="publish(document)">发布并建立索引</el-button>
       </article><el-empty v-if="!documents.length" description="尚无知识文档" />
@@ -258,13 +261,16 @@ onMounted(load)
 .knowledge-expansion-filters { display: flex; flex-wrap: wrap; gap: 16px; }
 .knowledge-expansion-summary { margin: 20px 0 8px; color: #8da4ae; }
 .observation-card a { color: #91aebc; }
-.knowledge-document-card { margin-top: 12px; padding: 20px 22px; border: 1px solid #2b363f; border-radius: 8px; background: #11171d; }
+.knowledge-document-card { min-width: 0; margin-top: 12px; padding: 20px 22px; overflow: hidden; border: 1px solid #2b363f; border-radius: 8px; background: #11171d; }
 .knowledge-document-card header { display: grid; gap: 12px; }
-.knowledge-document-card h3 { margin: 0; color: #e5edf0; font-size: 18px; font-weight: 650; line-height: 1.45; }
+.knowledge-document-card h3 { margin: 0; color: #e5edf0; font-size: 18px; font-weight: 650; line-height: 1.45; overflow-wrap: anywhere; }
 .knowledge-document-tags { display: flex; flex-wrap: wrap; gap: 7px; }
 .knowledge-document-tags span { padding: 4px 8px; border: 1px solid #35414a; border-radius: 5px; color: #94a5ad; background: #181f26; font-size: 12px; }
 .knowledge-document-tags span[data-status="PUBLISHED"] { color: #9bc9bb; border-color: #31564c; }
 .knowledge-document-tags span[data-status="DRAFT"] { color: #cbb888; border-color: #5b5138; }
-.knowledge-document-meta { color: #7f929a; font-size: 13px; }
-.knowledge-document-card pre { max-height: 260px; }
+.knowledge-document-meta { color: #7f929a; font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+.knowledge-document-content { margin: 16px 0; overflow: hidden; border: 1px solid #2f3c45; border-radius: 7px; background: #0c1319; }
+.knowledge-document-content summary { padding: 13px 15px; color: #c2d0d5; font-size: 14px; font-weight: 650; cursor: pointer; user-select: none; }
+.knowledge-document-content[open] summary { border-bottom: 1px solid #2f3c45; }
+.knowledge-document-content > div { max-height: 420px; overflow: auto; padding: 16px; color: #b8c8ce; font-family: inherit; font-size: 14px; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
 </style>

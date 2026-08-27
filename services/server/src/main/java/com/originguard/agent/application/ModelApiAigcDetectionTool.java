@@ -22,18 +22,21 @@ public class ModelApiAigcDetectionTool implements AgentTool {
     private final AigcResultExplainer resultExplainer;
     private final AigcEvidenceFusion evidenceFusion;
     private final ForensicModelRegistry modelRegistry;
+    private final AgentExecutionEventRecorder eventRecorder;
 
     public ModelApiAigcDetectionTool(
             MediaAssetService mediaAssetService,
             AgentArtifactStorage artifactStorage,
             AigcResultExplainer resultExplainer,
             AigcEvidenceFusion evidenceFusion,
-            ForensicModelRegistry modelRegistry) {
+            ForensicModelRegistry modelRegistry,
+            AgentExecutionEventRecorder eventRecorder) {
         this.mediaAssetService = mediaAssetService;
         this.artifactStorage = artifactStorage;
         this.resultExplainer = resultExplainer;
         this.evidenceFusion = evidenceFusion;
         this.modelRegistry = modelRegistry;
+        this.eventRecorder = eventRecorder;
     }
 
     @Override
@@ -53,20 +56,63 @@ public class ModelApiAigcDetectionTool implements AgentTool {
             Map<String, Object> mediaTypeContext = objectMap(mediaTypeContexts.get(asset.id().toString()));
             if (mediaTypeContext.isEmpty()) mediaTypeContext = unavailableMediaTypeContext();
             String mediaType = String.valueOf(mediaTypeContext.getOrDefault("mediaType", "UNKNOWN"));
+            eventRecorder.recordAigc(
+                    context,
+                    taskId,
+                    "MODEL_ROUTING_STARTED",
+                    Map.of("assetId", asset.id().toString(), "mediaType", mediaType),
+                    Map.of("message", "正在根据媒体类型与能力适用范围选择检测模型"));
             ForensicModelRegistry.ModelRoute route =
                     modelRegistry.route(asset.contentType(), mediaType, "AIGC_DETECTION");
             ForensicModelAdapter adapter = modelRegistry.requireAdapter(route.selected().code());
+            eventRecorder.recordAigc(
+                    context,
+                    taskId,
+                    "PRIMARY_MODEL_STARTED",
+                    Map.of("assetId", asset.id().toString(), "capabilityCode", route.selected().code()),
+                    Map.of(
+                            "message", "已选择“" + route.selected().displayName() + "”，正在分析原始图片",
+                            "capabilityName", route.selected().displayName(),
+                            "mediaType", mediaType,
+                            "degraded", !route.unavailableRecommended().isEmpty()));
             Map<String, Object> detection = adapter.analyze(stored.content(), asset.contentType());
+            eventRecorder.recordAigc(
+                    context,
+                    taskId,
+                    "PRIMARY_MODEL_COMPLETED",
+                    Map.of("assetId", asset.id().toString(), "capabilityCode", route.selected().code()),
+                    compactDetectionEvent(route, detection));
             Map<String, Object> quality = objectMap(detection.get("qualityAssessment"));
-            Map<String, Object> fusion = evidenceFusion.fuse(detection, mediaTypeContext, quality);
-            byte[] attentionOverlay = detection.containsKey("attentionOverlayPngBase64")
-                    ? Base64.getDecoder().decode(String.valueOf(detection.get("attentionOverlayPngBase64")))
-                    : new byte[0];
+            Map<String, Object> secondaryVerification = runDiffusionVerificationIfUseful(
+                    context, taskId, asset, stored.content(), mediaType, detection);
+            eventRecorder.recordAigc(
+                    context,
+                    taskId,
+                    "EVIDENCE_FUSION_STARTED",
+                    Map.of("assetId", asset.id().toString()),
+                    Map.of("message", "正在合并主检测、媒体类型、图像质量与扩散复核信号"));
+            Map<String, Object> fusion = evidenceFusion.fuse(detection, mediaTypeContext, quality, secondaryVerification);
+            eventRecorder.recordAigc(
+                    context,
+                    taskId,
+                    "EVIDENCE_FUSED",
+                    Map.of("assetId", asset.id().toString()),
+                    Map.of(
+                            "message", "多源检测信号已完成融合，准备生成可解释说明",
+                            "verdict", String.valueOf(fusion.getOrDefault("verdict", "INCONCLUSIVE")),
+                            "confidence", String.valueOf(fusion.getOrDefault("confidence", "LOW")),
+                            "decisionReady", Boolean.TRUE.equals(fusion.get("decisionReady"))));
+            String visualizationBase64 = String.valueOf(detection.getOrDefault(
+                    "localizationOverlayPngBase64", detection.getOrDefault("attentionOverlayPngBase64", "")));
+            byte[] attentionOverlay = visualizationBase64.isBlank()
+                    ? new byte[0] : Base64.getDecoder().decode(visualizationBase64);
             Map<String, Object> finding = new LinkedHashMap<>();
             finding.put("assetId", asset.id().toString());
             finding.put("filename", asset.originalFilename());
             detection.forEach((key, value) -> {
-                if (!"attentionOverlayPngBase64".equals(key)) finding.put(key, value);
+                if (!"attentionOverlayPngBase64".equals(key) && !"localizationOverlayPngBase64".equals(key)) {
+                    finding.put(key, value);
+                }
             });
             if (attentionOverlay.length > 0) {
                 AgentArtifactStorage.StoredArtifact artifact = artifactStorage.storeAttentionOverlay(
@@ -80,12 +126,30 @@ public class ModelApiAigcDetectionTool implements AgentTool {
             }
             finding.put("mediaTypeContext", mediaTypeContext);
             finding.put("modelRouting", route.toMap());
+            finding.put("secondaryVerification", secondaryVerification);
             finding.put("fusion", fusion);
             Map<String, Object> explanationInput = new LinkedHashMap<>(detection);
             explanationInput.put("mediaTypeContext", mediaTypeContext);
             explanationInput.put("fusion", fusion);
-            finding.put("explanation", resultExplainer.explain(
-                    asset.originalFilename(), stored.content(), attentionOverlay, explanationInput));
+            explanationInput.put("secondaryVerification", secondaryVerification);
+            eventRecorder.recordAigc(
+                    context,
+                    taskId,
+                    "RESULT_EXPLANATION_STARTED",
+                    Map.of("assetId", asset.id().toString()),
+                    Map.of("message", "LLM 正在把模型信号整理为可核验的中文说明"));
+            Map<String, Object> explanation = resultExplainer.explain(
+                    asset.originalFilename(), stored.content(), attentionOverlay, explanationInput);
+            finding.put("explanation", explanation);
+            eventRecorder.recordAigc(
+                    context,
+                    taskId,
+                    "RESULT_EXPLAINED",
+                    Map.of("assetId", asset.id().toString()),
+                    Map.of(
+                            "message", "中文结果说明已生成",
+                            "summary", String.valueOf(explanation.getOrDefault("summary", "模型结果解释已完成")),
+                            "source", String.valueOf(explanation.getOrDefault("source", "DETERMINISTIC_TEMPLATE"))));
             finding.put("forensicObservation", normalizedObservation(
                     asset, route, detection, fusion, quality, finding.get("attentionArtifact")));
             findings.add(Map.copyOf(finding));
@@ -118,6 +182,90 @@ public class ModelApiAigcDetectionTool implements AgentTool {
         output.put("capabilityCatalog", modelRegistry.catalog());
         output.put("limitations", first.getOrDefault("limitations", List.of()));
         return Map.copyOf(output);
+    }
+
+    private Map<String, Object> runDiffusionVerificationIfUseful(
+            AgentExecutionContext context,
+            UUID taskId,
+            MediaAsset asset,
+            byte[] content,
+            String mediaType,
+            Map<String, Object> detection) {
+        String classification = String.valueOf(detection.getOrDefault("classification", "INCONCLUSIVE"));
+        double probability = detection.get("syntheticProbability") instanceof Number number
+                ? number.doubleValue() : 0.5;
+        boolean useful = "LIKELY_SYNTHETIC".equals(classification)
+                || "INCONCLUSIVE".equals(classification)
+                || (probability >= 0.35 && probability <= 0.65);
+        if (!useful) {
+            eventRecorder.recordAigc(
+                    context,
+                    taskId,
+                    "SECONDARY_CHECK_DECIDED",
+                    Map.of("assetId", asset.id().toString()),
+                    Map.of(
+                            "message", "主检测信号明确，本次不追加扩散重建复核",
+                            "action", "SKIP",
+                            "reason", "主检测结果未触发扩散模型复核条件"));
+            return Map.of("status", "SKIPPED", "reason", "主检测结果未触发扩散模型复核条件");
+        }
+        eventRecorder.recordAigc(
+                context,
+                taskId,
+                "SECONDARY_CHECK_DECIDED",
+                Map.of("assetId", asset.id().toString()),
+                Map.of(
+                        "message", "主检测结果需要独立复核，准备计算扩散重建距离",
+                        "action", "RUN",
+                        "reason", "检测结果为疑似生成或处于不确定区间"));
+        try {
+            ForensicModelRegistry.ModelRoute route = modelRegistry.route(
+                    asset.contentType(), mediaType, "DIFFUSION_RECONSTRUCTION_VERIFICATION");
+            ForensicModelAdapter adapter = modelRegistry.requireAdapter(route.selected().code());
+            eventRecorder.recordAigc(
+                    context,
+                    taskId,
+                    "SECONDARY_MODEL_STARTED",
+                    Map.of("assetId", asset.id().toString(), "capabilityCode", route.selected().code()),
+                    Map.of("message", "正在运行扩散重建痕迹复核", "capabilityName", route.selected().displayName()));
+            Map<String, Object> verification = new LinkedHashMap<>(adapter.analyze(content, asset.contentType()));
+            verification.put("modelRouting", route.toMap());
+            eventRecorder.recordAigc(
+                    context,
+                    taskId,
+                    "SECONDARY_MODEL_COMPLETED",
+                    Map.of("assetId", asset.id().toString(), "capabilityCode", route.selected().code()),
+                    Map.of(
+                            "message", "扩散重建复核已完成",
+                            "reconstructionDistance", verification.getOrDefault("reconstructionDistance", "UNAVAILABLE"),
+                            "classification", verification.getOrDefault("classification", "INCONCLUSIVE"),
+                            "calibrated", Boolean.TRUE.equals(verification.get("calibrated"))));
+            return Map.copyOf(verification);
+        } catch (RuntimeException exception) {
+            eventRecorder.recordAigc(
+                    context,
+                    taskId,
+                    "SECONDARY_MODEL_UNAVAILABLE",
+                    Map.of("assetId", asset.id().toString()),
+                    Map.of("message", "扩散重建复核当前不可用，保留主检测结果继续分析"));
+            return Map.of(
+                    "status", "UNAVAILABLE",
+                    "reason", "扩散重建复核能力未启用或当前不可用",
+                    "detail", exception.getMessage() == null ? exception.getClass().getSimpleName() : exception.getMessage());
+        }
+    }
+
+    private Map<String, Object> compactDetectionEvent(
+            ForensicModelRegistry.ModelRoute route, Map<String, Object> detection) {
+        Map<String, Object> event = new LinkedHashMap<>();
+        event.put("message", "“" + route.selected().displayName() + "”已完成分析");
+        event.put("capabilityName", route.selected().displayName());
+        event.put("classification", detection.getOrDefault("classification", "INCONCLUSIVE"));
+        event.put("syntheticProbability", detection.getOrDefault("syntheticProbability", "UNAVAILABLE"));
+        event.put("qualityStatus", objectMap(detection.get("qualityAssessment")).getOrDefault("status", "UNAVAILABLE"));
+        event.put("localizationAvailable", detection.containsKey("localizationOverlayPngBase64")
+                || detection.containsKey("attentionOverlayPngBase64"));
+        return Map.copyOf(event);
     }
 
     private Map<String, Object> normalizedObservation(
