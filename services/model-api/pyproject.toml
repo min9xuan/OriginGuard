@@ -45,6 +45,8 @@ strict = true
 module = [
     "aeroblade.*",
     "clip",
+    "diffusers",
+    "diffusers.*",
     "IMDLBenCo.*",
     "lpips",
     "torchvision",

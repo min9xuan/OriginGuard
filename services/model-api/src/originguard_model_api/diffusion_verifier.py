@@ -137,7 +137,8 @@ class LocalDiffusionVerifier:
             }
             if not self._autoencoder.endswith("sd-vae-ft-mse"):
                 load_options["subfolder"] = "vae"
-            self._vae = AutoencoderKL.from_pretrained(  # type: ignore[no-untyped-call]
+            autoencoder_type: Any = AutoencoderKL
+            self._vae = autoencoder_type.from_pretrained(
                 self._autoencoder,
                 **load_options,
             ).to(self._device).eval()
