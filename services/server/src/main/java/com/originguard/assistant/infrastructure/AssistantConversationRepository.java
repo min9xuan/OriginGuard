@@ -119,6 +119,17 @@ public class AssistantConversationRepository {
                 .query(this::mapMessage).list();
     }
 
+    public boolean hasTerminalAgentMessage(UUID tenantId, UUID conversationId, UUID taskId) {
+        Integer count = jdbcClient.sql("""
+                        SELECT count(*) FROM assistant_message
+                        WHERE tenant_id = :tenantId AND conversation_id = :conversationId
+                          AND agent_task_id = :taskId AND message_type IN ('AGENT_RESULT', 'ERROR')
+                        """)
+                .param("tenantId", tenantId).param("conversationId", conversationId).param("taskId", taskId)
+                .query(Integer.class).single();
+        return count != null && count > 0;
+    }
+
     private Optional<AssistantMessage> findMessage(UUID tenantId, UUID id) {
         return jdbcClient.sql("""
                         SELECT id, tenant_id, conversation_id, role, message_type, content,

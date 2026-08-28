@@ -1,6 +1,7 @@
 package com.originguard.assistant.application;
 
 import com.originguard.agent.application.AgentTaskService;
+import com.originguard.agent.application.AgentTaskDispatcher;
 import com.originguard.agent.domain.AgentKnowledgeCitation;
 import com.originguard.agent.domain.AgentTask;
 import com.originguard.assistant.domain.AssistantConversation;
@@ -15,6 +16,7 @@ import com.originguard.knowledge.domain.KnowledgeSearchResult;
 import com.originguard.media.application.MediaAssetService;
 import com.originguard.media.domain.MediaAsset;
 import com.originguard.shared.application.ResourceNotFoundException;
+import com.originguard.shared.application.BusinessConflictException;
 import com.originguard.retrieval.application.RetrievalOrchestrator;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -23,6 +25,7 @@ import java.util.Map;
 import java.util.UUID;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.ObjectProvider;
 
 @Service
 public class AssistantWorkbenchService {
@@ -33,6 +36,7 @@ public class AssistantWorkbenchService {
     private final MediaAssetService mediaAssetService;
     private final InvestigationCaseService investigationCaseService;
     private final AgentTaskService agentTaskService;
+    private final ObjectProvider<AgentTaskDispatcher> taskDispatcher;
 
     public AssistantWorkbenchService(
             AssistantConversationRepository repository,
@@ -41,7 +45,8 @@ public class AssistantWorkbenchService {
             RetrievalOrchestrator retrievalOrchestrator,
             MediaAssetService mediaAssetService,
             InvestigationCaseService investigationCaseService,
-            AgentTaskService agentTaskService) {
+            AgentTaskService agentTaskService,
+            ObjectProvider<AgentTaskDispatcher> taskDispatcher) {
         this.repository = repository;
         this.actorProvider = actorProvider;
         this.llmClient = llmClient;
@@ -49,6 +54,7 @@ public class AssistantWorkbenchService {
         this.mediaAssetService = mediaAssetService;
         this.investigationCaseService = investigationCaseService;
         this.agentTaskService = agentTaskService;
+        this.taskDispatcher = taskDispatcher;
     }
 
     public ConversationDetails createConversation(String requestedTitle) {
@@ -75,31 +81,42 @@ public class AssistantWorkbenchService {
         repository.deleteConversation(actor.tenantId(), actor.userId(), conversationId);
     }
 
-    public ConversationDetails respond(UUID conversationId, String content, UUID requestedAssetId) {
+    public ConversationDetails respond(UUID conversationId, String content, List<UUID> requestedAssetIds) {
         CurrentActor actor = actorProvider.getRequiredActor();
         AssistantConversation conversation = requireConversation(actor, conversationId);
         List<AssistantMessage> history = repository.findMessages(actor.tenantId(), conversationId);
-        UUID contextAssetId = requestedAssetId != null ? requestedAssetId : mostRecentAsset(history);
-        MediaAsset requestedAsset = requestedAssetId == null ? null : mediaAssetService.require(actor.tenantId(), requestedAssetId);
-        WorkbenchLlmClient.RouteDecision route = requestedAssetId != null
+        List<UUID> normalizedAssetIds = requestedAssetIds == null ? List.of() : requestedAssetIds.stream().distinct().toList();
+        if (normalizedAssetIds.size() > 8) {
+            throw new BusinessConflictException("TOO_MANY_MEDIA_ATTACHMENTS", "A joint analysis supports at most 8 images");
+        }
+        List<UUID> contextAssetIds = normalizedAssetIds.isEmpty() ? mostRecentAssets(history) : normalizedAssetIds;
+        List<MediaAsset> requestedAssets = normalizedAssetIds.stream()
+                .map(id -> mediaAssetService.require(actor.tenantId(), id)).toList();
+        WorkbenchLlmClient.RouteDecision route = !normalizedAssetIds.isEmpty()
                 ? new WorkbenchLlmClient.RouteDecision(
                         WorkbenchLlmClient.Intent.MEDIA_ANALYSIS, modelSpecificQuery(content), true, "用户随消息上传了媒体")
-                : llmClient.route(content, history, contextAssetId != null);
+                : llmClient.route(content, history, !contextAssetIds.isEmpty());
 
         Map<String, Object> userGrounding = new LinkedHashMap<>();
         userGrounding.put("routeIntent", route.intent().name());
         userGrounding.put("routeReason", route.reason());
-        if (requestedAsset != null) userGrounding.put("attachmentName", requestedAsset.originalFilename());
+        if (!requestedAssets.isEmpty()) {
+            userGrounding.put("attachmentName", requestedAssets.getFirst().originalFilename());
+            userGrounding.put("attachmentNames", requestedAssets.stream().map(MediaAsset::originalFilename).toList());
+            userGrounding.put("assetIds", normalizedAssetIds.stream().map(UUID::toString).toList());
+            userGrounding.put("attachmentCount", requestedAssets.size());
+        }
+        UUID primaryAssetId = normalizedAssetIds.isEmpty() ? null : normalizedAssetIds.getFirst();
         repository.insertMessage(
                 actor.tenantId(), conversationId, "USER",
                 route.intent() == WorkbenchLlmClient.Intent.MEDIA_ANALYSIS ? "AGENT_REQUEST" : "CHAT",
-                content.trim(), requestedAssetId, null, userGrounding);
+                content.trim(), primaryAssetId, null, userGrounding);
         if (history.isEmpty()) repository.updateTitle(
                 actor.tenantId(), actor.userId(), conversationId, abbreviate(content, 42));
 
         history = repository.findMessages(actor.tenantId(), conversationId);
         if (route.intent() == WorkbenchLlmClient.Intent.NEEDS_ATTACHMENT
-                || (route.intent() == WorkbenchLlmClient.Intent.MEDIA_ANALYSIS && contextAssetId == null)) {
+                || (route.intent() == WorkbenchLlmClient.Intent.MEDIA_ANALYSIS && contextAssetIds.isEmpty())) {
             repository.insertMessage(
                     actor.tenantId(), conversationId, "ASSISTANT", "ATTACHMENT_REQUIRED",
                     "要判断某个具体图像或视频，需要先在输入框旁上传媒体。上传后我会把你的问题转化为 Agent 任务，而不是仅凭文字猜测。",
@@ -107,7 +124,7 @@ public class AssistantWorkbenchService {
             return getConversation(conversationId);
         }
         if (route.intent() == WorkbenchLlmClient.Intent.MEDIA_ANALYSIS) {
-            return runMediaAgent(actor, conversationId, content.trim(), contextAssetId, history, route.needsWebSearch());
+            return runMediaAgent(actor, conversationId, content.trim(), contextAssetIds, history, route.needsWebSearch());
         }
         return answerDirectly(
                 actor, conversationId, content.trim(), history,
@@ -133,45 +150,49 @@ public class AssistantWorkbenchService {
     }
 
     private ConversationDetails runMediaAgent(
-            CurrentActor actor, UUID conversationId, String question, UUID assetId,
+            CurrentActor actor, UUID conversationId, String question, List<UUID> assetIds,
             List<AssistantMessage> history, boolean needsWebSearch) {
         requireMediaAgentPermissions(actor);
-        MediaAsset asset = mediaAssetService.require(actor.tenantId(), assetId);
-        String caseTitle = abbreviate("媒体真实性分析 · " + asset.originalFilename(), 200);
+        List<MediaAsset> assets = assetIds.stream().map(id -> mediaAssetService.require(actor.tenantId(), id)).toList();
+        MediaAsset asset = assets.getFirst();
+        UUID assetId = asset.id();
+        String caseTitle = abbreviate(assets.size() > 1
+                ? "多图联合真实性分析 · " + assets.size() + " 张图片"
+                : "媒体真实性分析 · " + asset.originalFilename(), 200);
         String caseDescription = abbreviate(
                 "用户在对话工作台提出：" + question + "。由工作台意图路由触发 Agent，需结合既定取证策略、媒体内容和知识来源形成可核验结果。",
                 2000);
         InvestigationCaseService.CaseDetails created = investigationCaseService.create(
-                caseTitle, caseDescription, CasePriority.NORMAL, List.of(assetId));
+                caseTitle, caseDescription, CasePriority.NORMAL, assetIds);
         UUID caseId = created.investigationCase().id();
         InvestigationCaseService.CaseDetails ready = investigationCaseService.transition(
                 caseId, created.investigationCase().version(), CaseStatus.READY);
         investigationCaseService.transition(
                 caseId, ready.investigationCase().version(), CaseStatus.INVESTIGATING);
-        String goal = abbreviate("回答用户对当前媒体的具体问题：" + question
-                + "。必须执行适用于该媒体类型的真实性分析，结合本地知识说明局限；知识不得替代模型证据，最终结果需要用户人工核验。", 500);
+        String goal = abbreviate("回答用户对当前" + (assets.size() > 1 ? assets.size() + " 张图片" : "媒体")
+                + "的具体问题：" + question
+                + "。逐图检测并比较媒体类型、感知相似性、C2PA 内容凭证与 AIGC 模型信号，形成跨图联合结论；知识不得替代模型证据，最终结果需要用户人工核验。", 500);
         AgentTaskService.AgentTaskDetails pending = agentTaskService.create(caseId, goal, 13);
         UUID taskId = pending.task().id();
+        AgentTaskDispatcher dispatcher = taskDispatcher.getIfAvailable();
+        if (dispatcher != null) {
+            repository.insertMessage(
+                    actor.tenantId(), conversationId, "ASSISTANT", "CHAT",
+                    assets.size() > 1
+                            ? "多图联合分析任务已进入队列。我会逐图检测、比较相似关系、验证 C2PA 凭证，并在完成后给出联合结论。"
+                            : "Agent 分析任务已进入队列。我会实时记录媒体识别、模型检测、检索与证据融合过程，完成后在这里给出结论。",
+                    assetId, taskId, Map.of(
+                            "caseId", caseId.toString(), "agentTaskId", taskId.toString(),
+                            "agentStatus", "PENDING", "queued", true,
+                            "assetIds", assetIds.stream().map(UUID::toString).toList(),
+                            "attachmentNames", assets.stream().map(MediaAsset::originalFilename).toList(),
+                            "attachmentCount", assets.size()));
+            dispatcher.enqueue(taskId, actor.userId(), pending.task().version(), conversationId, assetId, question);
+            return getConversation(conversationId);
+        }
         try {
             AgentTaskService.AgentTaskDetails completed = agentTaskService.run(taskId, pending.task().version());
-            List<KnowledgeSearchResult> taskKnowledge = flattenTaskKnowledge(completed);
-            List<LiveWebSearchClient.WebSource> academic = taskAcademicSources(completed);
-            RetrievalOrchestrator.RetrievalBundle retrieval = new RetrievalOrchestrator.RetrievalBundle(
-                    taskKnowledge, academic, academic.isEmpty() ? "UNAVAILABLE" : "OPENALEX_ACADEMIC",
-                    RetrievalOrchestrator.Profile.PROFESSIONAL_FORENSICS,
-                    "专业检测优先已发布知识库与质量排序后的学术来源；检索材料只影响规划和解释。" );
-            String response = llmClient.explainAgentResult(
-                    question, history, agentFacts(completed), groundedContext(taskKnowledge, academic));
-            String influence = llmClient.summarizeRetrievalInfluence(
-                    question, response, groundedContext(taskKnowledge, academic), true);
-            Map<String, Object> grounding = grounding(retrieval, "MEDIA_ANALYSIS", influence);
-            grounding.put("caseId", caseId.toString());
-            grounding.put("agentTaskId", taskId.toString());
-            grounding.put("agentStatus", completed.task().status().name());
-            grounding.put("humanReviewRequired", true);
-            repository.insertMessage(
-                    actor.tenantId(), conversationId, "ASSISTANT", "AGENT_RESULT", response,
-                    assetId, taskId, grounding);
+            completeQueuedAgent(conversationId, question, assetId, completed);
         } catch (RuntimeException exception) {
             repository.insertMessage(
                     actor.tenantId(), conversationId, "ASSISTANT", "ERROR",
@@ -181,6 +202,44 @@ public class AssistantWorkbenchService {
                             "caseId", caseId.toString(), "agentTaskId", taskId.toString(), "agentStatus", "FAILED"));
         }
         return getConversation(conversationId);
+    }
+
+    public void completeQueuedAgent(
+            UUID conversationId, String question, UUID assetId, AgentTaskService.AgentTaskDetails completed) {
+        CurrentActor actor = actorProvider.getRequiredActor();
+        UUID taskId = completed.task().id();
+        if (repository.hasTerminalAgentMessage(actor.tenantId(), conversationId, taskId)) return;
+        if (!"COMPLETED".equals(completed.task().status().name())) {
+            repository.insertMessage(
+                    actor.tenantId(), conversationId, "ASSISTANT", "ERROR",
+                    "Agent 任务未能完成：" + safeText(completed.task().failureMessage())
+                            + "。你仍可进入任务详情查看已经记录的步骤。",
+                    assetId, taskId, Map.of(
+                            "caseId", completed.task().caseId().toString(),
+                            "agentTaskId", taskId.toString(), "agentStatus", completed.task().status().name()));
+            return;
+        }
+        List<AssistantMessage> history = repository.findMessages(actor.tenantId(), conversationId);
+        List<KnowledgeSearchResult> taskKnowledge = flattenTaskKnowledge(completed);
+        List<LiveWebSearchClient.WebSource> academic = taskAcademicSources(completed);
+        RetrievalOrchestrator.RetrievalBundle retrieval = new RetrievalOrchestrator.RetrievalBundle(
+                taskKnowledge, academic, academic.isEmpty() ? "UNAVAILABLE" : "OPENALEX_ACADEMIC",
+                RetrievalOrchestrator.Profile.PROFESSIONAL_FORENSICS,
+                "专业检测优先已发布知识库与质量排序后的学术来源；检索材料只影响规划和解释。");
+        String context = groundedContext(taskKnowledge, academic);
+        String response = llmClient.explainAgentResult(question, history, agentFacts(completed), context);
+        String influence = llmClient.summarizeRetrievalInfluence(question, response, context, true);
+        Map<String, Object> grounding = grounding(retrieval, "MEDIA_ANALYSIS", influence);
+        grounding.put("caseId", completed.task().caseId().toString());
+        grounding.put("agentTaskId", taskId.toString());
+        grounding.put("agentStatus", completed.task().status().name());
+        grounding.put("humanReviewRequired", true);
+        grounding.put("performance", completed.task().conclusion().getOrDefault("performance", Map.of()));
+        grounding.put("multiImageAnalysis", completed.task().conclusion().getOrDefault("multiImageAnalysis", Map.of()));
+        grounding.put("provenanceSummary", completed.task().conclusion().getOrDefault("provenanceSummary", Map.of()));
+        repository.insertMessage(
+                actor.tenantId(), conversationId, "ASSISTANT", "AGENT_RESULT", response,
+                assetId, taskId, grounding);
     }
 
     private List<KnowledgeSearchResult> flattenTaskKnowledge(AgentTaskService.AgentTaskDetails details) {
@@ -302,11 +361,16 @@ public class AssistantWorkbenchService {
                 + "；已记录观察=" + observations;
     }
 
-    private UUID mostRecentAsset(List<AssistantMessage> history) {
+    private List<UUID> mostRecentAssets(List<AssistantMessage> history) {
         for (int index = history.size() - 1; index >= 0; index--) {
-            if (history.get(index).assetId() != null) return history.get(index).assetId();
+            Object raw = history.get(index).grounding().get("assetIds");
+            if (raw instanceof List<?> values) {
+                List<UUID> ids = values.stream().map(String::valueOf).map(UUID::fromString).distinct().toList();
+                if (!ids.isEmpty()) return ids;
+            }
+            if (history.get(index).assetId() != null) return List.of(history.get(index).assetId());
         }
-        return null;
+        return List.of();
     }
 
     private void requireMediaAgentPermissions(CurrentActor actor) {
@@ -334,6 +398,10 @@ public class AssistantWorkbenchService {
 
     private String safeMessage(RuntimeException exception) {
         String message = exception.getMessage();
+        return message == null || message.isBlank() ? "未知执行错误" : abbreviate(message, 400);
+    }
+
+    private String safeText(String message) {
         return message == null || message.isBlank() ? "未知执行错误" : abbreviate(message, 400);
     }
 

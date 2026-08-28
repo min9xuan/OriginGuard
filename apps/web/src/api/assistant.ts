@@ -26,10 +26,10 @@ export const assistantApi = {
       accessToken,
     )
   },
-  send(conversationId: string, content: string, assetId: string | null, accessToken: string) {
+  send(conversationId: string, content: string, assetIds: string[], accessToken: string) {
     return apiRequest<AssistantConversationDetails>(
       `/assistant/conversations/${conversationId}/messages`,
-      { method: 'POST', body: JSON.stringify({ content, assetId }) },
+      { method: 'POST', body: JSON.stringify({ content, assetIds }) },
       accessToken,
     )
   },

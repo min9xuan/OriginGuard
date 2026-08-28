@@ -37,6 +37,7 @@ const executionDrawerVisible = ref(false)
 const verificationSection = ref<HTMLElement | null>(null)
 const liveTrace = ref<HTMLElement | null>(null)
 let disposed = false
+let progressAbort: AbortController | null = null
 const originalUrls = ref<Record<string, string>>({})
 const attentionUrls = ref<Record<string, string>>({})
 const visualizationLoading = ref<Record<string, boolean>>({})
@@ -115,6 +116,47 @@ const currentStageName = computed(() => latestStep.value ? stepMeta(latestStep.v
 const conclusionVerdict = computed(() => verdictLabel(String(details.value?.task.conclusion.verdict || '尚未生成')))
 const conclusionSummary = computed(() => localizeSystemText(String(details.value?.task.conclusion.summary || '')))
 const conclusionConfidence = computed(() => confidenceLabel(details.value?.task.conclusion.confidence))
+const performance = computed(() => objectValue(details.value?.task.conclusion.performance))
+const multiImageAnalysis = computed(() => objectValue(details.value?.task.conclusion.multiImageAnalysis))
+const jointAssetCount = computed(() => Number(multiImageAnalysis.value.assetCount || 1))
+const firstDetailedObservationId = computed(() => {
+  const observations = details.value?.observations ?? []
+  return observations.find(item => item.evidenceType === 'AIGC_DETECTION')?.id ?? observations[0]?.id ?? ''
+})
+const perAssetResults = computed(() => Array.isArray(multiImageAnalysis.value.perAsset)
+  ? multiImageAnalysis.value.perAsset.map(objectValue) : [])
+const relatedPairs = computed(() => Array.isArray(multiImageAnalysis.value.relatedPairs)
+  ? multiImageAnalysis.value.relatedPairs.map(objectValue) : [])
+const activeAssetId = ref('')
+const mediaObservationGroups = computed(() => {
+  const groups = new Map<string, { assetId: string; observations: AgentObservation[] }>()
+  for (const observation of details.value?.observations ?? []) {
+    if (!observation.assetId) continue
+    const group = groups.get(observation.assetId) ?? { assetId: observation.assetId, observations: [] }
+    group.observations.push(observation)
+    groups.set(observation.assetId, group)
+  }
+  return [...groups.values()]
+})
+const activeMediaGroup = computed(() => mediaObservationGroups.value.find(group => group.assetId === activeAssetId.value)
+  ?? mediaObservationGroups.value[0])
+const activeAigcObservation = computed(() => activeMediaGroup.value?.observations.find(item => item.evidenceType === 'AIGC_DETECTION'))
+const activeMediaTypeObservation = computed(() => activeMediaGroup.value?.observations.find(item => item.evidenceType === 'MEDIA_TYPE_CLASSIFICATION'))
+const activeProvenanceObservation = computed(() => activeMediaGroup.value?.observations.find(item => item.evidenceType === 'CONTENT_PROVENANCE'))
+const activeIntegrityObservation = computed(() => activeMediaGroup.value?.observations.find(item => item.evidenceType === 'FILE_INTEGRITY'))
+
+watch(mediaObservationGroups, (groups) => {
+  if (!groups.length) {
+    activeAssetId.value = ''
+    return
+  }
+  if (!groups.some(group => group.assetId === activeAssetId.value)) activeAssetId.value = groups[0].assetId
+}, { immediate: true })
+const seconds = (value: unknown) => typeof value === 'number' ? `${(value / 1000).toFixed(2)} 秒` : '未记录'
+const provenanceStatusLabel = (value: unknown) => ({
+  VERIFIED: '凭证有效', INVALID: '凭证异常', NOT_FOUND: '未发现凭证',
+  NOT_CONFIGURED: '校验器未配置', UNAVAILABLE: '暂不可用',
+} as Record<string, string>)[String(value)] ?? String(value || '未知')
 const conclusionSource = computed(() => details.value?.task.conclusion.synthesisSource === 'LOCAL_QWEN3_VL'
   ? '本地 Qwen 综合研判'
   : '确定性降级研判')
@@ -126,6 +168,18 @@ const conclusionMissingEvidence = computed(() => textItems(details.value?.task.c
 const retrievalInfluenceSummary = computed(() => String(details.value?.task.conclusion.retrievalInfluenceSummary || ''))
 const academicSources = computed(() => Array.isArray(details.value?.task.conclusion.academicSources)
   ? details.value!.task.conclusion.academicSources as Array<Record<string, unknown>> : [])
+const webRetrievalProvider = computed(() => String(details.value?.task.conclusion.webRetrievalProvider || 'NOT_EXECUTED'))
+const webRetrievalStatus = computed(() => String(details.value?.task.conclusion.webRetrievalStatus
+  || (academicSources.value.length ? 'COMPLETED_WITH_RESULTS' : 'NOT_EXECUTED')))
+const provenanceSummary = computed(() => objectValue(details.value?.task.conclusion.provenanceSummary))
+const provenanceCounts = computed(() => objectValue(provenanceSummary.value.counts))
+const provenanceItems = computed(() => Array.isArray(provenanceSummary.value.items)
+  ? provenanceSummary.value.items.map(objectValue) : [])
+const webRetrievalStatusLabel = computed(() => ({
+  COMPLETED_WITH_RESULTS: `已联网并取得 ${academicSources.value.length} 条来源`,
+  COMPLETED_NO_RESULTS: '已联网检索，但本次没有取得匹配来源',
+  NOT_EXECUTED: '本次任务没有执行实时检索',
+} as Record<string, string>)[webRetrievalStatus.value] || webRetrievalStatus.value)
 const citationCount = computed(() => details.value?.knowledgeRetrievals.reduce(
   (total, retrieval) => total + retrieval.citations.length,
   0,
@@ -201,21 +255,25 @@ async function refreshProgress() {
 }
 
 async function followExistingRun() {
-  if (!details.value || details.value.task.status !== 'RUNNING') return
+  if (!details.value || !['PENDING', 'RUNNING'].includes(details.value.task.status)) return
   mutating.value = true
   executionDrawerVisible.value = true
+  progressAbort?.abort()
+  progressAbort = new AbortController()
   try {
-    while (!disposed && details.value?.task.status === 'RUNNING') {
-      await wait(900)
-      await refreshProgress()
-    }
+    await agentApi.events(taskId, auth.accessToken, async () => {
+      if (disposed) return
+      const snapshot = await refreshProgress()
+      if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(snapshot.task.status)) progressAbort?.abort()
+    }, progressAbort.signal)
+  } catch (error) {
+    if (!progressAbort.signal.aborted && !disposed) showError(error)
+  } finally {
+    if (!disposed) await refreshProgress().catch(() => undefined)
     if (details.value) {
       await loadAigcVisualizations(details.value)
       await loadCaseContext(details.value.task.caseId)
     }
-  } catch (error) {
-    if (!disposed) showError(error)
-  } finally {
     mutating.value = false
   }
 }
@@ -329,6 +387,42 @@ function probabilityLabel(value: unknown) {
   return typeof value === 'number' ? `${(value * 100).toFixed(1)}%` : '未知'
 }
 
+function observationFileLabel(observation: AgentObservation) {
+  return String(observation.payload.filename || observation.assetId || '综合观察')
+}
+
+function observationOutcomeLabel(observation: AgentObservation) {
+  if (observation.evidenceType === 'AIGC_DETECTION') {
+    const verdict = verdictLabel(String(fusionFor(observation).verdict || observation.payload.classification || 'INCONCLUSIVE'))
+    return `${verdict} · AI 生成概率 ${probabilityLabel(observation.payload.syntheticProbability)}`
+  }
+  if (observation.evidenceType === 'CONTENT_PROVENANCE') {
+    return `C2PA：${provenanceStatusLabel(observation.payload.status)}`
+  }
+  return '查看观察详情'
+}
+
+function groupAigcObservation(group: { observations: AgentObservation[] }) {
+  return group.observations.find(item => item.evidenceType === 'AIGC_DETECTION')
+}
+
+function groupOutcomeLabel(group: { observations: AgentObservation[] }) {
+  const observation = groupAigcObservation(group)
+  return observation ? observationOutcomeLabel(observation) : '尚未取得主检测结果'
+}
+
+function groupFileLabel(group: { assetId: string; observations: AgentObservation[] }) {
+  const filename = group.observations.map(item => item.payload.filename).find(Boolean)
+  return String(filename || group.assetId)
+}
+
+function selectAdjacentAsset(offset: number) {
+  const groups = mediaObservationGroups.value
+  if (groups.length < 2) return
+  const current = Math.max(0, groups.findIndex(group => group.assetId === activeMediaGroup.value?.assetId))
+  activeAssetId.value = groups[(current + offset + groups.length) % groups.length].assetId
+}
+
 function isModelExecutionStep(type: string) {
   return [
     'MODEL_ROUTING_STARTED', 'PRIMARY_MODEL_STARTED', 'PRIMARY_MODEL_COMPLETED',
@@ -383,29 +477,10 @@ async function run() {
   if (!details.value) return
   mutating.value = true
   executionDrawerVisible.value = true
-  let finished = false
-  let response: AgentTaskDetails | null = null
-  let requestError: unknown = null
   try {
-    const request = agentApi.run(taskId, details.value.task.version, auth.accessToken)
-      .then((value) => { response = value })
-      .catch((error) => { requestError = error })
-      .finally(() => { finished = true })
-    while (!disposed && !finished) {
-      await wait(800)
-      if (!finished) {
-        try { await refreshProgress() } catch { /* The running request remains authoritative. */ }
-      }
-    }
-    await request
-    if (requestError) throw requestError
-    const completedResponse = response as AgentTaskDetails | null
-    if (completedResponse) {
-      details.value = completedResponse
-      await loadAigcVisualizations(completedResponse)
-      await loadCaseContext(completedResponse.task.caseId)
-    }
-    ElMessage.success('图片分析已完成，请在页面底部完成人工核验')
+    details.value = await agentApi.run(taskId, details.value.task.version, auth.accessToken)
+    ElMessage.success('Agent 任务已进入队列，可离开页面后稍后查看')
+    await followExistingRun()
   } catch (error) {
     showError(error)
     await load()
@@ -552,6 +627,7 @@ onMounted(async () => {
 })
 onBeforeUnmount(() => {
   disposed = true
+  progressAbort?.abort()
   releaseVisualizations()
 })
 </script>
@@ -569,7 +645,7 @@ onBeforeUnmount(() => {
       <header class="page-header split-header agent-task-header">
         <div>
           <p class="eyebrow">DETECTION RESULT</p>
-          <h1>图片真实性分析结果</h1>
+          <h1>{{ jointAssetCount > 1 ? '多图联合真实性分析结果' : '图片真实性分析结果' }}</h1>
           <p>{{ sourceCase?.title || '图片真实性检测' }} · {{ formatDate(details.task.createdAt) }}</p>
         </div>
         <div class="status-stack">
@@ -627,6 +703,25 @@ onBeforeUnmount(() => {
         <article class="panel"><span>参考知识</span><strong>{{ citationCount }} 条</strong></article>
       </section>
 
+      <section v-if="jointAssetCount > 1" class="panel joint-analysis-panel">
+        <div class="section-heading">
+          <div><h2>{{ jointAssetCount }} 张图片的联合分析</h2><p>先逐图检测，再比较图片间的感知相似关系与来源凭证；各图片仍保留独立模型结果。</p></div>
+          <span class="source-badge">{{ multiImageAnalysis.comparisonCount || 0 }} 组比较</span>
+        </div>
+        <div class="joint-result-grid">
+          <article v-for="item in perAssetResults" :key="String(item.assetId)">
+            <span>{{ item.filename }}</span>
+            <strong>{{ verdictLabel(String(item.classification || 'INCONCLUSIVE')) }}</strong>
+            <small>AI 生成概率 {{ probabilityLabel(item.syntheticProbability) }} · {{ provenanceStatusLabel(item.provenanceStatus) }}</small>
+          </article>
+        </div>
+        <div class="joint-relation-summary">
+          <strong>跨图关系</strong>
+          <p v-if="relatedPairs.length">发现 {{ relatedPairs.length }} 组相同或近重复图片；点击下方感知相似度观察可查看距离。</p>
+          <p v-else>没有发现相同或近重复图片。相似度只描述视觉关系，不能单独证明共同来源。</p>
+        </div>
+      </section>
+
       <section v-if="Object.keys(details.task.conclusion).length" class="panel agent-conclusion result-panel">
         <div class="section-heading">
           <div><h2>Agent 综合初步判断</h2><p>生成内容鉴别模型提供检测方向，CLIP 负责类型路由，LLM 综合现有证据；该结果需要由你核验。</p></div>
@@ -636,6 +731,9 @@ onBeforeUnmount(() => {
           <span>{{ conclusionSource }}</span>
           <span>{{ conclusionConfidence }}</span>
           <span>需要人工复核</span>
+          <span>排队 {{ seconds(performance.queueWaitMillis) }}</span>
+          <span>执行 {{ seconds(performance.executionDurationMillis) }}</span>
+          <span>缓存命中 {{ performance.cacheHitCount ?? 0 }} 次</span>
         </div>
         <p class="conclusion-summary">{{ conclusionSummary || '本次任务没有生成文字结论。' }}</p>
         <div v-if="retrievalInfluenceSummary" class="conclusion-limitations retrieval-impact-panel">
@@ -655,6 +753,27 @@ onBeforeUnmount(() => {
         <div v-if="conclusionLimitations.length" class="conclusion-limitations">
           <strong>人工复核时需要注意</strong>
           <ul><li v-for="item in conclusionLimitations" :key="item">{{ item }}</li></ul>
+        </div>
+      </section>
+
+      <section v-if="Object.keys(details.task.conclusion).length" class="panel evidence-visibility-panel">
+        <div class="section-heading"><div><h2>联网检索与内容溯源</h2><p>明确展示两项能力是否真正执行，以及执行后取得了什么结果。</p></div></div>
+        <div class="evidence-visibility-grid">
+          <article>
+            <span>实时学术检索</span>
+            <strong>{{ webRetrievalStatusLabel }}</strong>
+            <p>提供方：{{ webRetrievalProvider }}。专业检测仅用这些资料解释方法、适用范围与局限，不把论文当作当前图片真假的直接证据。</p>
+          </article>
+          <article>
+            <span>C2PA 内容溯源</span>
+            <strong v-if="provenanceItems.length">已校验 {{ provenanceItems.length }} 个文件</strong>
+            <strong v-else>本次没有形成溯源结果</strong>
+            <p v-if="provenanceItems.length">
+              有效 {{ provenanceCounts.VERIFIED || 0 }} · 异常 {{ provenanceCounts.INVALID || 0 }} ·
+              无凭证 {{ provenanceCounts.NOT_FOUND || 0 }} · 不可用/未配置 {{ (Number(provenanceCounts.UNAVAILABLE) || 0) + (Number(provenanceCounts.NOT_CONFIGURED) || 0) }}
+            </p>
+            <p v-else>C2PA 校验应在文件完整性检查阶段执行；旧任务不会自动补跑新增的溯源能力。</p>
+          </article>
         </div>
       </section>
 
@@ -700,9 +819,120 @@ onBeforeUnmount(() => {
       <section class="detail-grid agent-result-grid">
         <article class="panel">
           <div class="section-heading"><div><h2>媒体取证观察</h2><p>工具产生的客观事实与模型信号，最终结果由你完成人工核验。</p></div></div>
-          <div v-for="item in details.observations" :key="item.id" class="observation-card readable-card">
-            <div class="card-title-row"><strong>{{ evidenceTypeLabel(item.evidenceType) }}</strong><span>候选观察</span></div>
-            <p>{{ item.summary }}</p>
+          <section v-if="jointAssetCount > 1 && activeMediaGroup" class="multi-media-browser">
+            <header class="multi-media-browser-header">
+              <div>
+                <span>逐图分析</span>
+                <strong>{{ mediaObservationGroups.findIndex(group => group.assetId === activeMediaGroup?.assetId) + 1 }} / {{ mediaObservationGroups.length }}</strong>
+              </div>
+              <nav aria-label="切换当前分析图片">
+                <button type="button" aria-label="上一张图片" @click="selectAdjacentAsset(-1)">←</button>
+                <button type="button" aria-label="下一张图片" @click="selectAdjacentAsset(1)">→</button>
+              </nav>
+            </header>
+
+            <div class="media-switcher" role="tablist" aria-label="多图分析结果">
+              <button
+                v-for="(group, index) in mediaObservationGroups"
+                :key="group.assetId"
+                type="button"
+                role="tab"
+                :aria-selected="group.assetId === activeMediaGroup?.assetId"
+                :class="{ active: group.assetId === activeMediaGroup?.assetId }"
+                @click="activeAssetId = group.assetId"
+              >
+                <span>{{ String(index + 1).padStart(2, '0') }}</span>
+                <div>
+                  <strong>{{ groupFileLabel(group) }}</strong>
+                  <small>{{ groupOutcomeLabel(group) }}</small>
+                </div>
+              </button>
+            </div>
+
+            <div v-if="activeAigcObservation" class="active-media-analysis">
+              <section class="active-media-visuals" aria-label="当前图片与模型可视化">
+                <figure>
+                  <img v-if="originalUrls[activeAigcObservation.id]" :src="originalUrls[activeAigcObservation.id]" alt="当前接受分析的原始媒体" />
+                  <div v-else class="visual-placeholder">原图暂不可用</div>
+                  <figcaption>原始图片</figcaption>
+                </figure>
+                <figure class="analysis-visual">
+                  <img v-if="attentionUrls[activeAigcObservation.id]" :src="attentionUrls[activeAigcObservation.id]" alt="当前图片的生成内容模型可视化" />
+                  <div v-else class="visual-placeholder">当前模型没有生成区域可视化</div>
+                  <figcaption>{{ isLocalizationResult(activeAigcObservation) ? '疑似 AI 生成区域' : '模型关注区域（不等同于精确生成位置）' }}</figcaption>
+                </figure>
+              </section>
+
+              <aside class="active-media-summary">
+                <span>当前图片初步判断</span>
+                <strong>{{ verdictLabel(String(fusionFor(activeAigcObservation).verdict || activeAigcObservation.payload.classification || 'INCONCLUSIVE')) }}</strong>
+                <div class="active-probability">
+                  <small>AI 生成概率</small>
+                  <b>{{ probabilityLabel(activeAigcObservation.payload.syntheticProbability) }}</b>
+                </div>
+                <p>{{ explanationFor(activeAigcObservation).summary || activeAigcObservation.summary }}</p>
+                <dl>
+                  <div><dt>媒体类型</dt><dd>{{ activeMediaTypeObservation ? mediaTypeLabel(activeMediaTypeObservation.payload) : mediaTypeLabel(mediaTypeContextFor(activeAigcObservation)) }}</dd></div>
+                  <div><dt>模型置信度</dt><dd>{{ confidenceLabel(fusionFor(activeAigcObservation).confidence) }}</dd></div>
+                  <div><dt>C2PA 溯源</dt><dd>{{ activeProvenanceObservation ? provenanceStatusLabel(activeProvenanceObservation.payload.status) : '未执行' }}</dd></div>
+                </dl>
+              </aside>
+            </div>
+
+            <div v-else class="active-media-missing">当前图片尚未取得 AIGC 主检测结果，可查看下方辅助观察。</div>
+
+            <section class="active-supporting-evidence">
+              <article v-if="activeMediaTypeObservation">
+                <span>内容类型与模型路由</span>
+                <strong>{{ mediaTypeLabel(activeMediaTypeObservation.payload) }}</strong>
+                <p>{{ activeMediaTypeObservation.summary }}</p>
+              </article>
+              <article v-if="activeIntegrityObservation">
+                <span>文件完整性</span>
+                <strong>已完成检查</strong>
+                <p>{{ activeIntegrityObservation.summary }}</p>
+              </article>
+              <article v-if="activeProvenanceObservation">
+                <span>C2PA 来源凭证</span>
+                <strong>{{ provenanceStatusLabel(activeProvenanceObservation.payload.status) }}</strong>
+                <p>{{ activeProvenanceObservation.summary }}</p>
+              </article>
+            </section>
+
+            <details v-if="activeAigcObservation" class="active-model-details">
+              <summary>查看当前图片的模型链路与解释依据</summary>
+              <ol class="evidence-pipeline" aria-label="当前图片模型分析链路">
+                <li v-for="stage in analysisStagesFor(activeAigcObservation)" :key="stage.index" :class="stage.state">
+                  <span>{{ stage.index }}</span>
+                  <div><small>{{ stage.label }}</small><strong>{{ stage.value }}</strong><p>{{ stage.detail }}</p></div>
+                </li>
+              </ol>
+              <div v-if="textItems(fusionFor(activeAigcObservation).reasons).length" class="fusion-reasons">
+                <strong>融合判断依据</strong>
+                <ul><li v-for="reason in textItems(fusionFor(activeAigcObservation).reasons)" :key="reason">{{ reason }}</li></ul>
+              </div>
+              <div v-if="textItems(explanationFor(activeAigcObservation).counterSignals).length" class="explanation-list counter">
+                <strong>需要谨慎看待的现象</strong>
+                <ul><li v-for="signal in textItems(explanationFor(activeAigcObservation).counterSignals)" :key="signal">{{ signal }}</li></ul>
+              </div>
+            </details>
+          </section>
+          <details
+            v-else
+            v-for="item in details.observations"
+            :key="item.id"
+            class="observation-card readable-card observation-disclosure"
+            :open="jointAssetCount <= 1 || item.id === firstDetailedObservationId"
+          >
+            <summary class="observation-summary">
+              <span class="observation-summary-copy">
+                <small>{{ evidenceTypeLabel(item.evidenceType) }} · {{ observationFileLabel(item) }}</small>
+                <strong>{{ observationOutcomeLabel(item) }}</strong>
+              </span>
+              <span class="observation-summary-action">查看详情</span>
+            </summary>
+            <div class="observation-expanded">
+              <p>{{ item.summary }}</p>
             <template v-if="item.evidenceType === 'AIGC_DETECTION'">
               <section class="aigc-result-brief">
                 <div class="aigc-result-verdict">
@@ -814,26 +1044,52 @@ onBeforeUnmount(() => {
                 </div>
               </div>
             </template>
-            <dl v-else-if="payloadFields(item.payload).length" class="fact-grid">
-              <template v-for="field in payloadFields(item.payload)" :key="field.label">
-                <dt>{{ field.label }}</dt><dd>{{ field.value }}</dd>
-              </template>
-            </dl>
-          </div>
+            <section v-else-if="item.evidenceType === 'CONTENT_PROVENANCE'" class="provenance-card" :data-status="item.payload.status">
+              <div>
+                <span>C2PA 校验状态</span>
+                <strong>{{ provenanceStatusLabel(item.payload.status) }}</strong>
+                <small>{{ item.payload.filename || item.assetId }}</small>
+              </div>
+              <dl>
+                <div><dt>是否含凭证</dt><dd>{{ item.payload.credentialPresent ? '是' : '否' }}</dd></div>
+                <div><dt>清单数量</dt><dd>{{ item.payload.manifestCount ?? 0 }}</dd></div>
+                <div><dt>声明/签署工具</dt><dd>{{ item.payload.signer || '未记录' }}</dd></div>
+              </dl>
+              <p>C2PA 能验证签名、文件绑定与声明的编辑历史；未发现凭证不是负面证据，有效凭证也不等于画面内容必然真实。</p>
+            </section>
+              <dl v-else-if="payloadFields(item.payload).length" class="fact-grid">
+                <template v-for="field in payloadFields(item.payload)" :key="field.label">
+                  <dt>{{ field.label }}</dt><dd>{{ field.value }}</dd>
+                </template>
+              </dl>
+            </div>
+          </details>
           <el-empty v-if="!details.observations.length" description="本次任务还没有产生媒体观察" />
         </article>
 
         <article class="panel">
-          <div class="section-heading"><div><h2>取证知识依据</h2><p>RAG 为调查方案提供参考，不会直接成为媒体真假证据。</p></div></div>
+          <div class="section-heading"><div><h2>取证知识依据</h2><p>分别展示已发布知识库与实时网络学术检索；它们为调查方案提供参考，不会直接成为媒体真假证据。</p></div></div>
+          <section class="live-retrieval-section">
+            <div class="live-retrieval-heading">
+              <div><span>实时网络 · {{ webRetrievalProvider }}</span><strong>{{ webRetrievalStatusLabel }}</strong></div>
+              <small>执行状态会保留，即使返回 0 条也不会隐藏</small>
+            </div>
+            <article v-for="source in academicSources" :key="String(source.url || source.title)" class="academic-source-card">
+              <a :href="String(source.url)" target="_blank" rel="noreferrer">{{ source.title }}</a>
+              <small>{{ source.venue || '学术来源' }}<template v-if="source.publicationYear"> · {{ source.publicationYear }}</template></small>
+              <p>{{ source.snippet }}</p>
+              <span>{{ source.qualityReason || source.qualityTier }}</span>
+            </article>
+          </section>
           <div v-for="retrieval in details.knowledgeRetrievals" :key="retrieval.id" class="knowledge-group">
-            <p class="knowledge-query">本次 RAG 检索获得 {{ retrieval.citations.length }} 条可引用知识片段。</p>
+            <p class="knowledge-query">已发布知识库获得 {{ retrieval.citations.length }} 条可引用知识片段。</p>
             <article v-for="citation in retrieval.citations" :key="citation.id" class="citation-card">
               <strong>{{ citation.documentTitle }}</strong>
               <p>{{ citation.quote }}</p>
               <small>文档版本 {{ citation.documentVersion }} · 引用 {{ citation.citationOrder }}</small>
             </article>
           </div>
-          <el-empty v-if="!details.knowledgeRetrievals.length" description="本次任务没有检索到知识依据" />
+          <el-empty v-if="!details.knowledgeRetrievals.length && !academicSources.length" description="本次任务没有检索到知识依据" />
         </article>
       </section>
 

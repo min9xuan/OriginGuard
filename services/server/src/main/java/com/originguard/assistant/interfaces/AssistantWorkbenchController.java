@@ -2,6 +2,8 @@ package com.originguard.assistant.interfaces;
 
 import com.originguard.assistant.application.AssistantWorkbenchService;
 import com.originguard.assistant.domain.AssistantConversation;
+import com.originguard.identity.application.CurrentActorProvider;
+import com.originguard.shared.application.RedisRateLimiter;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -22,9 +24,14 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/assistant/conversations")
 public class AssistantWorkbenchController {
     private final AssistantWorkbenchService service;
+    private final RedisRateLimiter rateLimiter;
+    private final CurrentActorProvider actorProvider;
 
-    public AssistantWorkbenchController(AssistantWorkbenchService service) {
+    public AssistantWorkbenchController(AssistantWorkbenchService service, RedisRateLimiter rateLimiter,
+            CurrentActorProvider actorProvider) {
         this.service = service;
+        this.rateLimiter = rateLimiter;
+        this.actorProvider = actorProvider;
     }
 
     @PostMapping
@@ -59,11 +66,16 @@ public class AssistantWorkbenchController {
     @PreAuthorize("hasAuthority('agent:run')")
     public AssistantWorkbenchService.ConversationDetails respond(
             @PathVariable UUID conversationId, @Valid @RequestBody SendMessageRequest request) {
-        return service.respond(conversationId, request.content(), request.assetId());
+        rateLimiter.requireAllowed(actorProvider.getRequiredActor().userId(), "assistant-message");
+        List<UUID> assetIds = request.assetIds() == null || request.assetIds().isEmpty()
+                ? request.assetId() == null ? List.of() : List.of(request.assetId())
+                : request.assetIds();
+        return service.respond(conversationId, request.content(), assetIds);
     }
 
     public record CreateConversationRequest(@Size(max = 160) String title) {}
     public record SendMessageRequest(
             @NotBlank @Size(max = 8000) String content,
-            UUID assetId) {}
+            UUID assetId,
+            @Size(max = 8) List<UUID> assetIds) {}
 }

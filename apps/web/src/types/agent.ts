@@ -46,6 +46,7 @@ export interface AgentObservation {
     | 'IMAGE_METADATA'
     | 'PERCEPTUAL_SIMILARITY'
     | 'MEDIA_TYPE_CLASSIFICATION'
+    | 'CONTENT_PROVENANCE'
     | 'AIGC_DETECTION'
   summary: string
   payload: Record<string, unknown>

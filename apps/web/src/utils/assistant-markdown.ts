@@ -65,11 +65,43 @@ export function renderAssistantMarkdown(markdown: string): string {
 }
 
 function renderInline(value: string): string {
-  return escapeHtml(value)
+  return replaceAssistantIcons(escapeHtml(value))
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/__(.+?)__/g, '<strong>$1</strong>')
     .replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>')
+}
+
+type AssistantIconName = 'alert' | 'check' | 'note' | 'search' | 'document' | 'agent' | 'experiment'
+
+const assistantIconPatterns: Array<[RegExp, AssistantIconName]> = [
+  [/(?:🛑|⛔|❗|‼️?|🔴|🚫)/gu, 'alert'],
+  [/(?:✅|☑️?|✔️?|🟢)/gu, 'check'],
+  [/(?:📌|📍|💡|ℹ️?)/gu, 'note'],
+  [/(?:🔎|🔍)/gu, 'search'],
+  [/(?:📋|🧾|📄|📑)/gu, 'document'],
+  [/(?:🤖)/gu, 'agent'],
+  [/(?:🧪|🔬)/gu, 'experiment'],
+]
+
+function replaceAssistantIcons(value: string): string {
+  return assistantIconPatterns.reduce(
+    (result, [pattern, name]) => result.replace(pattern, assistantIcon(name)),
+    value,
+  )
+}
+
+function assistantIcon(name: AssistantIconName): string {
+  const paths: Record<AssistantIconName, string> = {
+    alert: '<path d="M8 2.2 14 13H2L8 2.2Z"/><path d="M8 5.7v3.5"/><path d="M8 11.4h.01"/>',
+    check: '<circle cx="8" cy="8" r="5.8"/><path d="m5.2 8.1 1.8 1.8 3.8-4"/>',
+    note: '<path d="M5 2.5h6v4.1l1.7 1.7H9v5.2L7.3 12V8.3h-4l1.7-1.7V2.5Z"/>',
+    search: '<circle cx="7" cy="7" r="4.3"/><path d="m10.2 10.2 3.2 3.2"/>',
+    document: '<path d="M4 2.2h5l3 3v8.6H4V2.2Z"/><path d="M9 2.2v3h3M6.2 8h3.6M6.2 10.5h3.6"/>',
+    agent: '<rect x="3" y="4.2" width="10" height="8.3" rx="2"/><path d="M8 2v2.2M5.7 7.5h.01M10.3 7.5h.01M6 10h4"/>',
+    experiment: '<path d="M6 2.2h4M7 2.2v3.2l-3.5 6.1A1.5 1.5 0 0 0 4.8 14h6.4a1.5 1.5 0 0 0 1.3-2.5L9 5.4V2.2M5.3 10h5.4"/>',
+  }
+  return `<span class="assistant-inline-icon ${name}" aria-hidden="true"><svg viewBox="0 0 16 16">${paths[name]}</svg></span>`
 }
 
 function escapeHtml(value: string): string {

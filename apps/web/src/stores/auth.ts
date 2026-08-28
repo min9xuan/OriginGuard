@@ -11,33 +11,39 @@ export const useAuthStore = defineStore('auth', () => {
   const user = ref<AuthenticatedUser | null>(readStoredUser())
   const initialized = ref(false)
   const authenticated = computed(() => Boolean(accessToken.value && user.value))
+  let restorePromise: Promise<void> | null = null
 
   async function login(request: LoginRequest) {
     const response = await authApi.login(request)
     setSession(response.accessToken, response.user)
   }
 
-  async function restoreSession() {
+  function restoreSession() {
     if (initialized.value) return
-    try {
-      if (accessToken.value) {
-        try {
-          user.value = await authApi.me(accessToken.value)
-          persist()
-        } catch {
-          clearSession()
+    if (restorePromise) return restorePromise
+    restorePromise = (async () => {
+      try {
+        if (accessToken.value) {
+          try {
+            user.value = await authApi.me(accessToken.value)
+            persist()
+          } catch {
+            clearSession()
+            const response = await authApi.refresh()
+            setSession(response.accessToken, response.user)
+          }
+        } else {
           const response = await authApi.refresh()
           setSession(response.accessToken, response.user)
         }
-      } else {
-        const response = await authApi.refresh()
-        setSession(response.accessToken, response.user)
+      } catch {
+        clearSession()
+      } finally {
+        initialized.value = true
+        restorePromise = null
       }
-    } catch {
-      clearSession()
-    } finally {
-      initialized.value = true
-    }
+    })()
+    return restorePromise
   }
 
   async function logout() {

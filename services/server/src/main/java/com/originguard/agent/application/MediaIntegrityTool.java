@@ -15,10 +15,13 @@ public class MediaIntegrityTool implements AgentTool {
 
     private final MediaAssetService mediaAssetService;
     private final MediaContentAnalyzer analyzer;
+    private final C2paVerificationClient c2paClient;
 
-    public MediaIntegrityTool(MediaAssetService mediaAssetService, MediaContentAnalyzer analyzer) {
+    public MediaIntegrityTool(MediaAssetService mediaAssetService, MediaContentAnalyzer analyzer,
+            C2paVerificationClient c2paClient) {
         this.mediaAssetService = mediaAssetService;
         this.analyzer = analyzer;
+        this.c2paClient = c2paClient;
     }
 
     @Override
@@ -54,6 +57,8 @@ public class MediaIntegrityTool implements AgentTool {
             finding.put("detectedContentType", analysis.detectedContentType());
             finding.put("contentTypeMatches", mimeMatches);
             finding.put("integrityPassed", shaMatches && sizeMatches && mimeMatches);
+            finding.put("provenance", c2paClient.verify(
+                    stored.content(), asset.originalFilename(), analysis.detectedContentType()));
             findings.add(Map.copyOf(finding));
         }
         return Map.of(

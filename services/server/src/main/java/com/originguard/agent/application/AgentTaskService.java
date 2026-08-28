@@ -22,6 +22,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.time.Duration;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
@@ -144,6 +145,7 @@ public class AgentTaskService {
     }
 
     public AgentTaskDetails run(UUID taskId, long expectedVersion) {
+        long executionStartedNanos = System.nanoTime();
         CurrentActor actor = actorProvider.getRequiredActor();
         AgentTask pending = requireTask(actor.tenantId(), taskId);
         InvestigationCase investigationCase = requireCase(actor.tenantId(), pending.caseId());
@@ -159,6 +161,12 @@ public class AgentTaskService {
         }
 
         AgentTask running = requireTask(actor.tenantId(), taskId);
+        long queueWaitMillis = running.startedAt() == null ? 0
+                : Math.max(0, Duration.between(running.createdAt(), running.startedAt()).toMillis());
+        repository.appendStep(
+                actor.tenantId(), taskId, "TASK_DEQUEUED", "SUCCEEDED", null, null,
+                Map.of("queuedAt", running.createdAt().toString()),
+                Map.of("queueWaitMillis", queueWaitMillis));
         boolean completedSuccessfully = false;
         try {
             AgentExecutionContext context = contextBuilder.build(investigationCase, actor);
@@ -180,6 +188,8 @@ public class AgentTaskService {
             List<String> knowledgeRetrievalIds = new ArrayList<>();
             Map<String, Object> aigcDetection = Map.of();
             Map<String, Object> retrievalEvidence = Map.of();
+            Map<String, Object> integrityAnalysis = Map.of();
+            Map<String, Object> similarityAnalysis = Map.of();
             int remainingBudget = running.remainingStepBudget();
             long checkpointVersion = running.checkpointVersion();
 
@@ -326,6 +336,8 @@ public class AgentTaskService {
                 if (SkillRegistry.AIGC_DETECTION_SKILL.equals(skill.code())) {
                     aigcDetection = toolOutput;
                 }
+                if (SkillRegistry.INTEGRITY_SKILL.equals(skill.code())) integrityAnalysis = toolOutput;
+                if (SkillRegistry.SIMILARITY_SKILL.equals(skill.code())) similarityAnalysis = toolOutput;
                 repository.appendStep(
                         actor.tenantId(), taskId, "TOOL_CALLED", "SUCCEEDED",
                         skill.code(), tool.code(), toolInput, toolOutput);
@@ -343,8 +355,9 @@ public class AgentTaskService {
                     latestObservations.add(new AgentPlanner.ObservationDigest(
                             "FORENSIC_GUIDANCE",
                             retrieval.knowledgeAvailable()
-                                    ? "取证知识检索获得 " + retrieval.citations().size() + " 条引用"
-                                    : "当前知识库未返回可用引用",
+                                    ? "取证检索获得 " + retrieval.citations().size() + " 条本地引用和 "
+                                            + numberValue(toolOutput.get("webSourceCount")) + " 条实时学术来源"
+                                    : "本地知识库与实时学术检索均未返回可用来源",
                             Map.of(
                                     "knowledgeRetrievalId", retrieval.id().toString(),
                                     "citationCount", retrieval.citations().size(),
@@ -356,6 +369,15 @@ public class AgentTaskService {
                                     "knowledgeRetrievalId", retrieval.id().toString(),
                                     "citationCount", retrieval.citations().size(),
                                     "knowledgeAvailable", retrieval.knowledgeAvailable()));
+                    repository.appendStep(
+                            actor.tenantId(), taskId, "LIVE_RETRIEVAL_RECORDED", "SUCCEEDED",
+                            skill.code(), tool.code(), Map.of("query", String.valueOf(toolOutput.get("query"))),
+                            Map.of(
+                                    "message", "实时学术检索已完成：" + toolOutput.getOrDefault("webProvider", "UNKNOWN")
+                                            + " 返回 " + numberValue(toolOutput.get("webSourceCount")) + " 条来源",
+                                    "provider", toolOutput.getOrDefault("webProvider", "UNKNOWN"),
+                                    "sourceCount", numberValue(toolOutput.get("webSourceCount")),
+                                    "status", toolOutput.getOrDefault("webSearchStatus", "UNKNOWN")));
                 } else if (SkillRegistry.AIGC_DETECTION_SKILL.equals(skill.code())) {
                     List<Map<String, Object>> findings = findings(toolOutput, "AIGC detection model");
                     for (Map<String, Object> finding : findings) {
@@ -398,6 +420,40 @@ public class AgentTaskService {
                                     "observationId", observation.id().toString(),
                                     "evidenceType", observation.evidenceType(),
                                     "summary", observation.summary()));
+                    if (SkillRegistry.INTEGRITY_SKILL.equals(skill.code())) {
+                        for (Map<String, Object> finding : findings(toolOutput, "media integrity")) {
+                            UUID findingAssetId = UUID.fromString(String.valueOf(finding.get("assetId")));
+                            Map<String, Object> provenance = objectMap(finding.get("provenance"));
+                            if (provenance.isEmpty()) continue;
+                            Map<String, Object> payload = new LinkedHashMap<>(provenance);
+                            payload.put("assetId", findingAssetId.toString());
+                            payload.put("filename", finding.getOrDefault("filename", "当前图片"));
+                            AgentObservation provenanceObservation = repository.insertObservation(
+                                    actor.tenantId(), taskId, investigationCase.id(), findingAssetId,
+                                    "CONTENT_PROVENANCE", provenanceSummary(finding, provenance), Map.copyOf(payload));
+                            observationIds.add(provenanceObservation.id().toString());
+                            latestObservations.add(new AgentPlanner.ObservationDigest(
+                                    provenanceObservation.evidenceType(), provenanceObservation.summary(),
+                                    Map.of("observationId", provenanceObservation.id().toString(),
+                                            "assetId", findingAssetId.toString(), "skillCode", skill.code())));
+                            repository.appendStep(
+                                    actor.tenantId(), taskId, "OBSERVATION_RECORDED", "SUCCEEDED",
+                                    skill.code(), tool.code(), Map.of("assetId", findingAssetId.toString()),
+                                    Map.of("observationId", provenanceObservation.id().toString(),
+                                            "evidenceType", provenanceObservation.evidenceType(),
+                                            "summary", provenanceObservation.summary()));
+                            repository.appendStep(
+                                    actor.tenantId(), taskId, "PROVENANCE_VERIFIED", "SUCCEEDED",
+                                    skill.code(), tool.code(), Map.of("assetId", findingAssetId.toString()),
+                                    Map.of(
+                                            "message", "C2PA 溯源校验完成：“"
+                                                    + finding.getOrDefault("filename", "当前图片") + "” · "
+                                                    + provenance.getOrDefault("status", "UNAVAILABLE"),
+                                            "assetId", findingAssetId.toString(),
+                                            "status", provenance.getOrDefault("status", "UNAVAILABLE"),
+                                            "credentialPresent", provenance.getOrDefault("credentialPresent", false)));
+                        }
+                    }
                 }
 
                 AgentPlanner.ReplanDecision decision = null;
@@ -492,9 +548,17 @@ public class AgentTaskService {
 
             remainingBudget = consumeBudget(remainingBudget);
             Map<String, Object> conclusion = new LinkedHashMap<>(conclusionFor(
-                    plan, executedSkills, observationIds, knowledgeRetrievalIds, aigcDetection, retrievalEvidence));
+                    plan, executedSkills, observationIds, knowledgeRetrievalIds, aigcDetection,
+                    retrievalEvidence, integrityAnalysis, similarityAnalysis));
             conclusion.put("executionMode", "PLAN_ACT_OBSERVE_REPLAN_STOP");
             conclusion.put("replanCount", replanCount);
+            long executionDurationMillis = (System.nanoTime() - executionStartedNanos) / 1_000_000L;
+            int cacheHits = cacheHitCount(enrichedContext.mediaTypeContexts()) + cacheHitCount(aigcDetection);
+            conclusion.put("performance", Map.of(
+                    "queueWaitMillis", queueWaitMillis,
+                    "executionDurationMillis", executionDurationMillis,
+                    "endToEndMillis", queueWaitMillis + executionDurationMillis,
+                    "cacheHitCount", cacheHits));
             repository.appendStep(
                     actor.tenantId(), taskId, "CONCLUSION_SYNTHESIZED", "SUCCEEDED",
                     plan.planCode(), null,
@@ -509,7 +573,11 @@ public class AgentTaskService {
             }
             repository.appendStep(
                     actor.tenantId(), taskId, "TASK_COMPLETED", "SUCCEEDED",
-                    plan.planCode(), null, Map.of(), Map.of("status", "COMPLETED"));
+                    plan.planCode(), null, Map.of(), Map.of(
+                            "status", "COMPLETED",
+                            "queueWaitMillis", queueWaitMillis,
+                            "executionDurationMillis", executionDurationMillis,
+                            "cacheHitCount", cacheHits));
             auditService.record(
                     actor.tenantId(),
                     actor.userId(),
@@ -550,6 +618,20 @@ public class AgentTaskService {
 
     private List<String> skillCodes(List<AgentPlanner.SkillSelection> selections) {
         return selections.stream().map(AgentPlanner.SkillSelection::skillCode).toList();
+    }
+
+    private int cacheHitCount(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            int result = Boolean.TRUE.equals(map.get("cacheHit")) ? 1 : 0;
+            for (Object nested : map.values()) result += cacheHitCount(nested);
+            return result;
+        }
+        if (value instanceof Iterable<?> values) {
+            int result = 0;
+            for (Object nested : values) result += cacheHitCount(nested);
+            return result;
+        }
+        return 0;
     }
 
     @Transactional
@@ -660,13 +742,27 @@ public class AgentTaskService {
                 + percent(finding.get("syntheticProbability")) + "；该结果仍需人工复核。" + routingNote;
     }
 
+    private String provenanceSummary(Map<String, Object> finding, Map<String, Object> provenance) {
+        String filename = String.valueOf(finding.getOrDefault("filename", "当前图片"));
+        String status = String.valueOf(provenance.getOrDefault("status", "UNAVAILABLE"));
+        return switch (status) {
+            case "VERIFIED" -> "“" + filename + "”包含通过校验的 C2PA 内容凭证；这可证明凭证与文件绑定有效，但不等于内容本身真实。";
+            case "INVALID" -> "“" + filename + "”的 C2PA 内容凭证未通过校验，需检查签名、绑定或编辑链异常。";
+            case "NOT_FOUND" -> "“" + filename + "”未发现 C2PA 内容凭证；缺少凭证不能据此判断图片为真或为假。";
+            case "NOT_CONFIGURED" -> "C2PA 校验器尚未配置，未对“" + filename + "”形成来源凭证结论。";
+            default -> "“" + filename + "”的 C2PA 校验暂不可用，本次不把来源凭证作为判断依据。";
+        };
+    }
+
     private Map<String, Object> conclusionFor(
             AgentPlanner.PlannerPlan plan,
             List<String> executedSkills,
             List<String> observationIds,
             List<String> knowledgeRetrievalIds,
             Map<String, Object> aigcDetection,
-            Map<String, Object> retrievalEvidence) {
+            Map<String, Object> retrievalEvidence,
+            Map<String, Object> integrityAnalysis,
+            Map<String, Object> similarityAnalysis) {
         Map<String, Object> agentAssessment = objectMap(aigcDetection.get("agentAssessment"));
         String verdict = String.valueOf(agentAssessment.getOrDefault(
                 "verdict", aigcDetection.getOrDefault("overallVerdict", "INCONCLUSIVE")));
@@ -681,7 +777,8 @@ public class AgentTaskService {
         List<String> limitations = new ArrayList<>();
         limitations.add("当前使用生成内容鉴别模型的 0.5 实验边界形成初步判断，尚未经过 OriginGuard 业务验证集校准");
         limitations.add("CLIP 只负责媒体类型与模型路由，不作为 AIGC 真伪证据");
-        limitations.add("尚未配置 C2PA 内容凭证校验器和篡改区域定位模型");
+        limitations.add("C2PA 只验证凭证、文件绑定和声明的编辑历史，不能单独证明画面真实或由 AI 生成");
+        limitations.add("尚未配置篡改区域定位模型");
         limitations.add(plannerLimitation(plan.provider()));
         Map<String, Object> conclusion = new LinkedHashMap<>();
         conclusion.put("verdict", verdict);
@@ -708,8 +805,96 @@ public class AgentTaskService {
                 "influenceSummary", "本次没有可用的外部检索来源影响方案或解释。"));
         conclusion.put("retrievalPolicy", retrievalEvidence.getOrDefault("retrievalPolicy", ""));
         conclusion.put("academicSources", retrievalEvidence.getOrDefault("academicSources", List.of()));
+        conclusion.put("webRetrievalProvider", retrievalEvidence.getOrDefault("webProvider", "NOT_EXECUTED"));
+        conclusion.put("webRetrievalStatus", retrievalEvidence.getOrDefault("webSearchStatus", "NOT_EXECUTED"));
+        conclusion.put("webSourceCount", retrievalEvidence.getOrDefault("webSourceCount", 0));
+        Map<String, Object> provenance = provenanceSummary(integrityAnalysis);
+        conclusion.put("provenanceSummary", provenance);
+        conclusion.put("multiImageAnalysis", multiImageAnalysis(aigcDetection, similarityAnalysis, integrityAnalysis));
         conclusion.put("limitations", List.copyOf(limitations));
         return Map.copyOf(conclusion);
+    }
+
+    private Map<String, Object> provenanceSummary(Map<String, Object> integrityAnalysis) {
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        List<Map<String, Object>> items = new ArrayList<>();
+        for (Map<String, Object> finding : optionalFindings(integrityAnalysis)) {
+            Map<String, Object> provenance = objectMap(finding.get("provenance"));
+            String status = String.valueOf(provenance.getOrDefault("status", "UNAVAILABLE"));
+            counts.put(status, counts.getOrDefault(status, 0) + 1);
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("assetId", finding.getOrDefault("assetId", ""));
+            item.put("filename", finding.getOrDefault("filename", ""));
+            item.put("status", status);
+            item.put("credentialPresent", provenance.getOrDefault("credentialPresent", false));
+            item.put("signer", provenance.getOrDefault("signer", ""));
+            item.put("manifestCount", provenance.getOrDefault("manifestCount", 0));
+            items.add(Map.copyOf(item));
+        }
+        return Map.of("counts", Map.copyOf(counts), "items", List.copyOf(items));
+    }
+
+    private Map<String, Object> multiImageAnalysis(
+            Map<String, Object> aigcDetection,
+            Map<String, Object> similarityAnalysis,
+            Map<String, Object> integrityAnalysis) {
+        List<Map<String, Object>> detections = optionalFindings(aigcDetection);
+        Map<String, Map<String, Object>> provenanceByAsset = new LinkedHashMap<>();
+        for (Map<String, Object> finding : optionalFindings(integrityAnalysis)) {
+            provenanceByAsset.put(String.valueOf(finding.get("assetId")), objectMap(finding.get("provenance")));
+        }
+        Map<String, Integer> verdictCounts = new LinkedHashMap<>();
+        List<Map<String, Object>> perAsset = new ArrayList<>();
+        for (Map<String, Object> detection : detections) {
+            String assetId = String.valueOf(detection.getOrDefault("assetId", ""));
+            String verdict = String.valueOf(detection.getOrDefault("classification", "INCONCLUSIVE"));
+            verdictCounts.put(verdict, verdictCounts.getOrDefault(verdict, 0) + 1);
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("assetId", assetId);
+            item.put("filename", detection.getOrDefault("filename", assetId));
+            item.put("classification", verdict);
+            item.put("syntheticProbability", detection.getOrDefault("syntheticProbability", 0));
+            item.put("provenanceStatus", provenanceByAsset.getOrDefault(assetId, Map.of())
+                    .getOrDefault("status", "UNAVAILABLE"));
+            perAsset.add(Map.copyOf(item));
+        }
+        List<Map<String, Object>> relatedPairs = new ArrayList<>();
+        Object comparisons = similarityAnalysis.get("comparisons");
+        if (comparisons instanceof List<?> values) {
+            for (Object value : values) {
+                if (!(value instanceof Map<?, ?> raw)) continue;
+                Map<String, Object> comparison = new LinkedHashMap<>();
+                raw.forEach((key, item) -> comparison.put(String.valueOf(key), item));
+                if (!"DIFFERENT".equals(String.valueOf(comparison.get("classification")))) {
+                    relatedPairs.add(Map.copyOf(comparison));
+                }
+            }
+        }
+        int assetCount = Math.max(detections.size(), numberValue(similarityAnalysis.get("assetCount")));
+        return Map.of(
+                "assetCount", assetCount,
+                "jointAnalysis", assetCount > 1,
+                "perAsset", List.copyOf(perAsset),
+                "verdictCounts", Map.copyOf(verdictCounts),
+                "relatedPairs", List.copyOf(relatedPairs),
+                "comparisonCount", numberValue(similarityAnalysis.get("comparisonCount")));
+    }
+
+    private List<Map<String, Object>> optionalFindings(Map<String, Object> output) {
+        Object raw = output.get("findings");
+        if (!(raw instanceof List<?> values)) return List.of();
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Object value : values) {
+            if (!(value instanceof Map<?, ?> map)) continue;
+            Map<String, Object> item = new LinkedHashMap<>();
+            map.forEach((key, entry) -> item.put(String.valueOf(key), entry));
+            result.add(Map.copyOf(item));
+        }
+        return List.copyOf(result);
+    }
+
+    private int numberValue(Object value) {
+        return value instanceof Number number ? number.intValue() : 0;
     }
 
     private String percent(Object value) {

@@ -9,7 +9,7 @@ OriginGuard 不让单个大模型直接猜测图片真假，而是通过 Agent H
 ### 用户检测流程
 
 - 产品展示首页与独立登录入口
-- JPEG、PNG、WebP 图片上传，单文件最大 25 MB
+- JPEG、PNG、WebP 图片上传，单文件最大 25 MB；一次可选择最多 8 张进行联合分析
 - 文件魔数、MIME、图片解码、大小与像素上限校验
 - 浏览器 SHA-256 计算与服务端内容指纹复核
 - 自动创建内部分析记录并启动 Agent，无需用户手工配置案件字段
@@ -40,6 +40,8 @@ Context → Plan → Validate → Act → Observe → Replan / Stop → Synthesi
 - 文件完整性检查：核对登记哈希、存储内容和文件大小
 - 图片元数据提取：记录格式、尺寸和可用 EXIF 摘要
 - 感知相似度：在存在多张可比图片时进行辅助比较
+- 多图联合分析：逐图保留模型概率与凭证状态，并汇总相同/近重复关系和跨图结论
+- C2PA 来源溯源：验证内容凭证、文件绑定、声明工具与编辑动作；无凭证只记为“未发现”，不作为真假证据
 - 结果解释：由本地多模态 LLM 综合模型信号、媒体事实与能力限制，生成中文说明
 
 媒体类型只用于选择取证能力和解释模型适用边界，不直接参与 AIGC 真伪投票；注意力图也不等同于精确生成区域或篡改区域。
@@ -60,7 +62,7 @@ ForensicModelAdapter
 - 新模型实现 `ForensicModelAdapter` 并注册为 Spring Bean 后即可参与路由
 - `GET /api/v1/agent-tasks/model-capabilities` 可查询当前模型能力目录
 
-当前已经具备通用图像生成内容鉴别能力；插画/卡通专用模型和扩散重建复核器已完成可执行适配，安装权重与可选依赖后会自动参与路由。三维渲染鉴别、局部篡改定位和内容来源凭证验证仍保留插件接口。
+当前已经具备通用图像生成内容鉴别能力；插画/卡通专用模型和扩散重建复核器已完成可执行适配，安装权重与可选依赖后会自动参与路由。C2PA 已通过独立 sidecar 接入，三维渲染鉴别与局部篡改定位仍保留插件接口。
 
 实现说明见 [M5.3 可插拔取证模型注册与动态路由](docs/product/m5.3-forensic-model-routing.md)。
 
@@ -99,10 +101,14 @@ ForensicModelAdapter
 - 模型服务：Python 3.11、FastAPI、PyTorch、Transformers
 - 数据与检索：PostgreSQL、pgvector
 - 对象存储：MinIO
-- 基础设施：Docker Compose
-- 扩展基础：Redis、RabbitMQ、异步模型 Worker 与内容凭证 Sidecar 骨架
+- 基础设施：Docker Compose、RabbitMQ、Redis
+- 异步执行：RabbitMQ 持久化 Agent 任务队列、幂等消费与死信队列
+- 实时状态：SSE 推送任务步骤、完成和失败事件
+- 性能保护：Redis 模型结果缓存、入队去重与用户级固定窗口限流
 
-Redis、RabbitMQ 和异步 Worker 已保留工程结构，但当前本地同步分析主链路不依赖它们运行。
+Agent 创建和 HTTP 请求已经与实际取证执行解耦：接口返回 `202 Accepted` 后由 RabbitMQ
+消费者运行任务；前端通过 SSE 持续接收进度。Redis 不保存案件主数据，只用于可失效的缓存、
+短期入队去重和每用户限流；Redis 暂时不可用时，取证能力会降级运行而不是丢失业务数据。
 
 ## 系统结构
 
@@ -110,8 +116,8 @@ Redis、RabbitMQ 和异步 Worker 已保留工程结构，但当前本地同步�
 apps/web                    用户端、检测记录与隐藏管理端
 services/server             身份安全、业务流程、Agent Harness 与 RAG
 services/model-api          Embedding、媒体分类和取证模型 API
-services/c2pa-sidecar       内容来源凭证适配器占位
-workers/model-worker        异步模型任务 Worker 骨架
+services/c2pa-sidecar       C2PA 内容凭证验证与标准化适配器
+workers/model-worker        独立模型 Worker 扩展目录
 packages/api-contract       OpenAPI 契约
 packages/event-schema       异步事件契约
 knowledge-base              受控知识源
@@ -146,7 +152,10 @@ tests                       跨服务测试与评测入口
 
 - PostgreSQL / pgvector
 - MinIO
+- Redis
+- RabbitMQ
 - Python Model API
+- C2PA 验证 Sidecar（未安装 c2patool 时以未配置状态安全运行）
 - 本地多模态 LLM API
 - Spring Boot 后端
 - Vue 前端
@@ -156,10 +165,33 @@ tests                       跨服务测试与评测入口
 - 产品首页：<http://127.0.0.1:5173>
 - 用户分析入口：<http://127.0.0.1:5173/analyze>
 - 管理端入口：<http://127.0.0.1:5173/admin>
-- 后端健康检查：<http://127.0.0.1:8080/actuator/health>
+- 后端健康检查：<http://127.0.0.1:18080/actuator/health>
 - 模型服务健康检查：<http://127.0.0.1:8090/health>
+- C2PA 服务健康检查：<http://127.0.0.1:8091/health>
+- RabbitMQ 管理台：<http://127.0.0.1:15672>
+
+### Agent 性能指标
+
+每个完成任务会在结论的 `performance` 字段和最终执行事件中记录：
+
+- `queueWaitMillis`：任务从创建到消费者开始执行的等待时间
+- `executionDurationMillis`：消费者内部实际执行 Agent 的时间
+- `endToEndMillis`：创建任务到结果完成的总时间
+- `cacheHitCount`：本次任务复用模型检测缓存的次数
+
+异步化主要缩短用户请求的阻塞时间并提高并发承载力，不会凭空缩短一次冷模型推理；同一媒体、
+同一模型能力再次分析时，Redis 缓存才会显著减少重复模型调用。实际提升应以相同媒体的冷、热两次
+任务以及历史同步任务的上述指标为准。
 
 脚本以后台进程方式运行服务，并将 PID 与日志保存在 `.runtime`。启动结束后当前终端可以继续输入命令。
+
+首次启用 C2PA 前安装官方验证工具：
+
+```powershell
+.\scripts\setup-c2pa.ps1
+```
+
+二进制、上传媒体和验证临时文件均位于 `.runtime` 或系统临时目录，不会提交到 Git。
 
 ### 停止全部服务
 

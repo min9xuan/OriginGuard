@@ -44,6 +44,9 @@ public class ForensicGuidanceRetrievalTool implements AgentTool {
         output.put("citationCount", citations.size());
         output.put("citations", citations);
         output.put("academicSources", academicSources);
+        output.put("webProvider", bundle.webProvider());
+        output.put("webSourceCount", academicSources.size());
+        output.put("webSearchStatus", academicSources.isEmpty() ? "COMPLETED_NO_RESULTS" : "COMPLETED_WITH_RESULTS");
         output.put("retrievalPolicy", bundle.policySummary());
         output.put("influenceSummary", "检索来源只参与方案选择、适用范围和局限解释；媒体真假概率与初步结论仍只来自实际执行的检测模型和媒体证据。");
         output.put("limitations", List.of(

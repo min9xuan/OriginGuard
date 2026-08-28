@@ -114,18 +114,7 @@ public class ForensicModelRegistry {
                         Set.of("TAMPER_PROBABILITY", "LOCALIZATION_MASK"),
                         80,
                         "定位拼接、修补或局部生成区域。",
-                        List.of("尚未接入可执行模型")),
-                new ForensicModelCapability(
-                        "content_provenance_verification",
-                        "内容来源凭证验证",
-                        "planned",
-                        "PROVENANCE_VERIFICATION",
-                        Set.of("IMAGE", "VIDEO"),
-                        Set.of(ForensicModelCapability.ANY_MEDIA_TYPE),
-                        Set.of("CREDENTIAL_STATUS", "SIGNER", "EDIT_HISTORY"),
-                        80,
-                        "验证内容凭证、签名与可追溯编辑历史。",
-                        List.of("尚未接入 C2PA 验证器")));
+                        List.of("尚未接入可执行模型")));
     }
 
     public record ModelRoute(

@@ -14,6 +14,7 @@ import com.originguard.agent.application.AgentArtifactStorage;
 import com.originguard.agent.application.AigcEvidenceFusion;
 import com.originguard.agent.application.AigcResultExplainer;
 import com.originguard.agent.application.ForensicModelRegistry;
+import com.originguard.agent.application.ForensicResultCache;
 import com.originguard.agent.application.GenericAigcModelAdapter;
 import com.originguard.agent.application.ModelApiAigcDetectionTool;
 import com.originguard.identity.domain.CurrentActor;
@@ -30,6 +31,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
@@ -63,6 +65,8 @@ class ModelApiAigcDetectionToolTests {
             AgentArtifactStorage artifacts = mock(AgentArtifactStorage.class);
             AigcResultExplainer explainer = mock(AigcResultExplainer.class);
             AgentExecutionEventRecorder events = mock(AgentExecutionEventRecorder.class);
+            ForensicResultCache cache = mock(ForensicResultCache.class);
+            when(cache.get(any(), any())).thenReturn(Optional.empty());
             when(media.readStored(tenantId, assetId))
                     .thenReturn(new MediaAssetService.StoredMedia(asset, mediaObject, new byte[] {1, 2, 3}));
             when(artifacts.storeAttentionOverlay(org.mockito.ArgumentMatchers.eq(tenantId),
@@ -86,7 +90,7 @@ class ModelApiAigcDetectionToolTests {
                     media, artifacts, explainer, new AigcEvidenceFusion(),
                     new ForensicModelRegistry(List.of(new GenericAigcModelAdapter(
                             "http://127.0.0.1:" + server.getAddress().getPort(), Duration.ofSeconds(5)))),
-                    events);
+                    events, cache);
 
             Map<String, Object> output = tool.execute(
                     context(tenantId, asset), Map.of(

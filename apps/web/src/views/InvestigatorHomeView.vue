@@ -2,6 +2,7 @@
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { assistantApi } from '../api/assistant'
+import { agentApi } from '../api/agents'
 import { ApiRequestError } from '../api/http'
 import { mediaApi } from '../api/media'
 import { useAuthStore } from '../stores/auth'
@@ -25,18 +26,25 @@ const sending = ref(false)
 const loading = ref(true)
 const fileInput = ref<HTMLInputElement | null>(null)
 const messageList = ref<HTMLElement | null>(null)
-const selectedFile = ref<File | null>(null)
-const selectedContentType = ref<SupportedImageType | null>(null)
-const selectedPreview = ref('')
-const selectedSha256 = ref('')
+interface SelectedAttachment {
+  file: File
+  contentType: SupportedImageType
+  preview: string
+  sha256: string
+}
+const selectedAttachments = ref<SelectedAttachment[]>([])
 const preparingFile = ref(false)
+let taskProgressAbort: AbortController | null = null
 
 const canSend = computed(() => Boolean(
   current.value && prompt.value.trim() && !sending.value && !preparingFile.value,
 ))
 
 onMounted(loadWorkbench)
-onBeforeUnmount(clearAttachment)
+onBeforeUnmount(() => {
+  clearAttachment()
+  taskProgressAbort?.abort()
+})
 
 async function loadWorkbench() {
   loading.value = true
@@ -96,51 +104,64 @@ function openPicker() {
 
 async function onFileChange(event: Event) {
   const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  if (file) await prepareAttachment(file)
+  const files = Array.from(input.files ?? [])
+  if (files.length) await prepareAttachments(files)
   input.value = ''
 }
 
-async function prepareAttachment(file: File) {
-  const contentType = await detectImageFileType(file)
-  if (!contentType) {
-    ElMessage.warning('当前仅支持 JPEG、PNG 和 WebP 图片，请确认文件真实格式')
+async function prepareAttachments(files: File[]) {
+  const remaining = Math.max(0, 8 - selectedAttachments.value.length)
+  if (!remaining) {
+    ElMessage.warning('一次联合分析最多选择 8 张图片')
     return
   }
-  clearAttachment()
-  selectedFile.value = file
-  selectedContentType.value = contentType
-  selectedPreview.value = URL.createObjectURL(file)
   preparingFile.value = true
   try {
-    selectedSha256.value = await sha256Hex(file)
-    if (!prompt.value.trim()) prompt.value = '请分析这张图片是否由 AI 生成，并说明判断依据与局限。'
+    const additions: SelectedAttachment[] = []
+    for (const file of files.slice(0, remaining)) {
+      const contentType = await detectImageFileType(file)
+      if (!contentType) {
+        ElMessage.warning(`已跳过 ${file.name}：仅支持真实的 JPEG、PNG 和 WebP 图片`)
+        continue
+      }
+      const sha256 = await sha256Hex(file)
+      if (selectedAttachments.value.some(item => item.sha256 === sha256) || additions.some(item => item.sha256 === sha256)) continue
+      additions.push({ file, contentType, preview: URL.createObjectURL(file), sha256 })
+    }
+    selectedAttachments.value.push(...additions)
+    if (files.length > remaining) ElMessage.info('一次最多分析 8 张图片，超出的文件未加入')
+    if (!prompt.value.trim() && selectedAttachments.value.length) {
+      prompt.value = selectedAttachments.value.length > 1
+        ? '请联合分析这些图片是否由 AI 生成，比较它们的相似关系、C2PA 来源凭证，并逐图说明依据与局限。'
+        : '请分析这张图片是否由 AI 生成，并说明判断依据与局限。'
+    }
   } catch {
-    clearAttachment()
-    ElMessage.error('浏览器无法读取该图片，请重新选择')
+    ElMessage.error('浏览器无法读取部分图片，请重新选择')
   } finally {
     preparingFile.value = false
   }
 }
 
 function clearAttachment() {
-  if (selectedPreview.value) URL.revokeObjectURL(selectedPreview.value)
-  selectedFile.value = null
-  selectedContentType.value = null
-  selectedPreview.value = ''
-  selectedSha256.value = ''
+  selectedAttachments.value.forEach(item => URL.revokeObjectURL(item.preview))
+  selectedAttachments.value = []
 }
 
-async function uploadAttachment(): Promise<string | null> {
-  if (!selectedFile.value || !selectedContentType.value || !selectedSha256.value) return null
-  const existing = (await mediaApi.list(auth.accessToken)).find(asset => asset.sha256 === selectedSha256.value)
-  const asset: MediaAsset = existing ?? await mediaApi.upload(
-    selectedFile.value,
-    selectedSha256.value,
-    auth.accessToken,
-    selectedContentType.value,
-  )
-  return asset.id
+function removeAttachment(index: number) {
+  const [removed] = selectedAttachments.value.splice(index, 1)
+  if (removed) URL.revokeObjectURL(removed.preview)
+}
+
+async function uploadAttachments(): Promise<string[]> {
+  if (!selectedAttachments.value.length) return []
+  const existing = await mediaApi.list(auth.accessToken)
+  return Promise.all(selectedAttachments.value.map(async item => {
+    const matched = existing.find(asset => asset.sha256 === item.sha256)
+    const asset: MediaAsset = matched ?? await mediaApi.upload(
+      item.file, item.sha256, auth.accessToken, item.contentType,
+    )
+    return asset.id
+  }))
 }
 
 async function sendMessage() {
@@ -148,7 +169,8 @@ async function sendMessage() {
   const text = prompt.value.trim()
   sending.value = true
   try {
-    const assetId = await uploadAttachment()
+    const assetIds = await uploadAttachments()
+    const attachmentNames = selectedAttachments.value.map(item => item.file.name)
     prompt.value = ''
     const conversationId = current.value.conversation.id
     current.value.messages.push({
@@ -156,18 +178,22 @@ async function sendMessage() {
       tenantId: '',
       conversationId,
       role: 'USER',
-      messageType: assetId ? 'AGENT_REQUEST' : 'CHAT',
+      messageType: assetIds.length ? 'AGENT_REQUEST' : 'CHAT',
       content: text,
-      assetId,
+      assetId: assetIds[0] ?? null,
       agentTaskId: null,
-      grounding: selectedFile.value ? { attachmentName: selectedFile.value.name } : {},
+      grounding: attachmentNames.length ? { attachmentName: attachmentNames[0], attachmentNames, attachmentCount: attachmentNames.length, assetIds } : {},
       createdAt: new Date().toISOString(),
     })
     clearAttachment()
     await scrollToBottom()
-    current.value = await assistantApi.send(conversationId, text, assetId, auth.accessToken)
+    current.value = await assistantApi.send(conversationId, text, assetIds, auth.accessToken)
     await refreshConversations()
     await scrollToBottom()
+    const queued = [...current.value.messages].reverse().find(message =>
+      message.agentTaskId && String(message.grounding.agentStatus || '') === 'PENDING',
+    )
+    if (queued?.agentTaskId) void followQueuedTask(conversationId, queued.agentTaskId)
   } catch (error) {
     prompt.value = text
     if (current.value) {
@@ -176,6 +202,28 @@ async function sendMessage() {
     ElMessage.error(error instanceof ApiRequestError ? error.message : '无法发送消息，请稍后重试')
   } finally {
     sending.value = false
+  }
+}
+
+async function followQueuedTask(conversationId: string, taskId: string) {
+  taskProgressAbort?.abort()
+  const controller = new AbortController()
+  taskProgressAbort = controller
+  try {
+    await agentApi.events(taskId, auth.accessToken, async () => {
+      if (controller.signal.aborted) return
+      const task = await agentApi.get(taskId, auth.accessToken)
+      current.value = await assistantApi.get(conversationId, auth.accessToken)
+      await scrollToBottom()
+      const terminalMessage = current.value.messages.some(message =>
+        message.agentTaskId === taskId && ['AGENT_RESULT', 'ERROR'].includes(message.messageType),
+      )
+      if (terminalMessage || task.task.status === 'CANCELLED') controller.abort()
+    }, controller.signal)
+  } catch {
+    if (!controller.signal.aborted) {
+      current.value = await assistantApi.get(conversationId, auth.accessToken).catch(() => current.value)
+    }
   }
 }
 
@@ -202,6 +250,12 @@ function groundingModes(message: AssistantMessage): string[] {
   return Array.isArray(message.grounding.groundingModes)
     ? message.grounding.groundingModes.map(String)
     : []
+}
+
+function attachmentNames(message: AssistantMessage): string[] {
+  const names = message.grounding.attachmentNames
+  if (Array.isArray(names)) return names.map(String)
+  return message.grounding.attachmentName ? [String(message.grounding.attachmentName)] : []
 }
 
 function modeLabel(mode: string) {
@@ -280,8 +334,9 @@ async function scrollToBottom() {
         >
           <div class="assistant-avatar">{{ message.role === 'USER' ? '你' : 'OG' }}</div>
           <div class="assistant-message-body">
-            <div v-if="message.grounding.attachmentName" class="assistant-message-attachment">
-              <span>图片附件</span><strong>{{ message.grounding.attachmentName }}</strong>
+            <div v-if="attachmentNames(message).length" class="assistant-message-attachment">
+              <span>{{ attachmentNames(message).length > 1 ? `${attachmentNames(message).length} 张联合分析` : '图片附件' }}</span>
+              <div><strong v-for="name in attachmentNames(message)" :key="name">{{ name }}</strong></div>
             </div>
             <div
               v-if="message.role === 'ASSISTANT'"
@@ -341,13 +396,21 @@ async function scrollToBottom() {
       </div>
 
       <footer class="assistant-composer-wrap">
-        <div v-if="selectedFile" class="assistant-selected-file">
-          <img :src="selectedPreview" :alt="selectedFile.name" />
-          <span><strong>{{ selectedFile.name }}</strong><small>{{ selectedContentType }} · {{ formatBytes(selectedFile.size) }}</small></span>
-          <button type="button" aria-label="移除附件" @click="clearAttachment">×</button>
+        <div v-if="selectedAttachments.length" class="assistant-selected-files">
+          <div class="assistant-selected-files-head">
+            <strong>待联合分析 {{ selectedAttachments.length }} 张</strong><small>最多 8 张 · 将逐图检测并比较相似关系</small>
+            <button type="button" @click="clearAttachment">全部移除</button>
+          </div>
+          <div class="assistant-selected-files-grid">
+            <article v-for="(item, index) in selectedAttachments" :key="item.sha256" class="assistant-selected-file">
+              <img :src="item.preview" :alt="item.file.name" />
+              <span><strong>{{ item.file.name }}</strong><small>{{ item.contentType }} · {{ formatBytes(item.file.size) }}</small></span>
+              <button type="button" aria-label="移除附件" @click="removeAttachment(index)">×</button>
+            </article>
+          </div>
         </div>
         <div class="assistant-composer">
-          <input ref="fileInput" class="visually-hidden" type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" @change="onFileChange" />
+          <input ref="fileInput" class="visually-hidden" type="file" multiple accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" @change="onFileChange" />
           <button type="button" class="assistant-attach" :disabled="sending" aria-label="上传图片" title="上传图片" @click="openPicker">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.5 12.5 14 6a4 4 0 0 1 5.7 5.6l-8.2 8.2a6 6 0 0 1-8.5-8.5l8.1-8.1" /></svg>
           </button>

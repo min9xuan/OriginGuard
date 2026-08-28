@@ -10,13 +10,34 @@ spring:
   flyway:
     enabled: true
     locations: classpath:db/migration
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+      timeout: 2s
+  rabbitmq:
+    host: ${RABBITMQ_HOST:127.0.0.1}
+    port: ${RABBITMQ_PORT:25672}
+    username: ${RABBITMQ_DEFAULT_USER:originguard}
+    password: ${RABBITMQ_DEFAULT_PASS:change-me}
+    listener:
+      simple:
+        concurrency: 1
+        max-concurrency: 2
+        prefetch: 1
+        default-requeue-rejected: false
+        retry:
+          enabled: true
+          initial-interval: 2s
+          multiplier: 2
+          max-attempts: 3
   servlet:
     multipart:
       max-file-size: 25MB
       max-request-size: 26MB
 
 server:
-  port: ${SERVER_PORT:8080}
+  port: ${SERVER_PORT:18080}
   shutdown: graceful
 
 management:
@@ -63,6 +84,14 @@ originguard:
       tavily-base-url: ${TAVILY_BASE_URL:https://api.tavily.com}
       timeout: ${WEB_SEARCH_TIMEOUT:PT20S}
   agent:
+    async:
+      enabled: ${AGENT_ASYNC_ENABLED:false}
+      queue: ${AGENT_QUEUE:originguard.agent.analysis}
+    cache:
+      enabled: ${AGENT_CACHE_ENABLED:true}
+      ttl: ${AGENT_CACHE_TTL:PT6H}
+    rate-limit:
+      requests-per-minute: ${AGENT_REQUESTS_PER_MINUTE:20}
     max-replans: ${AGENT_MAX_REPLANS:6}
     aigc-detector:
       provider: ${AIGC_DETECTOR_PROVIDER:model-api}
@@ -80,6 +109,10 @@ originguard:
       provider: ${MEDIA_TYPE_CLASSIFIER_PROVIDER:model-api}
       base-url: ${MODEL_API_BASE_URL:http://127.0.0.1:8090}
       timeout: ${CLIP_CLASSIFIER_TIMEOUT:PT2M}
+    c2pa:
+      enabled: ${C2PA_ENABLED:false}
+      base-url: ${C2PA_BASE_URL:http://127.0.0.1:8091}
+      timeout: ${C2PA_TIMEOUT:PT45S}
     aigc-explainer:
       provider: ${AIGC_EXPLAINER_PROVIDER:template}
       base-url: ${QWEN_VL_BASE_URL:http://127.0.0.1:8092}

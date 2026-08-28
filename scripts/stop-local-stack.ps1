@@ -59,7 +59,7 @@ if (Get-Command docker -ErrorAction SilentlyContinue) {
     if (Test-DockerReady) {
         Push-Location $repositoryRoot
         try {
-            docker compose stop postgres minio
+            docker compose stop postgres minio redis rabbitmq
             if ($LASTEXITCODE -ne 0) {
                 Write-Warning 'PostgreSQL or MinIO could not be stopped.'
             }

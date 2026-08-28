@@ -25,4 +25,17 @@ describe('renderAssistantMarkdown', () => {
     expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;')
     expect(html).toContain('<strong>安全</strong>')
   })
+
+  it('replaces colorful model emoji with the product line icon set', () => {
+    const html = renderAssistantMarkdown(`### ✅ 总结
+### 🛑 重要说明
+📌 提示`)
+
+    expect(html).not.toContain('✅')
+    expect(html).not.toContain('🛑')
+    expect(html).not.toContain('📌')
+    expect(html).toContain('assistant-inline-icon check')
+    expect(html).toContain('assistant-inline-icon alert')
+    expect(html).toContain('assistant-inline-icon note')
+  })
 })

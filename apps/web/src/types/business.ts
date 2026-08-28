@@ -117,7 +117,7 @@ export interface AgentEvidenceCandidate {
   observationId: string
   taskId: string
   assetId: string
-  evidenceType: 'FILE_INTEGRITY' | 'IMAGE_METADATA' | 'PERCEPTUAL_SIMILARITY'
+  evidenceType: 'FILE_INTEGRITY' | 'IMAGE_METADATA' | 'PERCEPTUAL_SIMILARITY' | 'CONTENT_PROVENANCE'
   summary: string
   payload: Record<string, unknown>
   promotedEvidenceId: string | null

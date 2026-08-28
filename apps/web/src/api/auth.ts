@@ -9,10 +9,15 @@ export const authApi = {
     })
   },
   refresh() {
-    return apiRequest<AuthResponse>('/auth/refresh', { method: 'POST' })
+    return apiRequest<AuthResponse>('/auth/refresh', {
+      method: 'POST',
+      signal: AbortSignal.timeout(8_000),
+    })
   },
   me(accessToken: string) {
-    return apiRequest<AuthenticatedUser>('/auth/me', {}, accessToken)
+    return apiRequest<AuthenticatedUser>('/auth/me', {
+      signal: AbortSignal.timeout(8_000),
+    }, accessToken)
   },
   logout() {
     // The refresh cookie is the session being revoked. Do not attach a possibly expired

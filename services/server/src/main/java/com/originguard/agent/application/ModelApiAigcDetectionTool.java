@@ -23,6 +23,7 @@ public class ModelApiAigcDetectionTool implements AgentTool {
     private final AigcEvidenceFusion evidenceFusion;
     private final ForensicModelRegistry modelRegistry;
     private final AgentExecutionEventRecorder eventRecorder;
+    private final ForensicResultCache resultCache;
 
     public ModelApiAigcDetectionTool(
             MediaAssetService mediaAssetService,
@@ -30,13 +31,15 @@ public class ModelApiAigcDetectionTool implements AgentTool {
             AigcResultExplainer resultExplainer,
             AigcEvidenceFusion evidenceFusion,
             ForensicModelRegistry modelRegistry,
-            AgentExecutionEventRecorder eventRecorder) {
+            AgentExecutionEventRecorder eventRecorder,
+            ForensicResultCache resultCache) {
         this.mediaAssetService = mediaAssetService;
         this.artifactStorage = artifactStorage;
         this.resultExplainer = resultExplainer;
         this.evidenceFusion = evidenceFusion;
         this.modelRegistry = modelRegistry;
         this.eventRecorder = eventRecorder;
+        this.resultCache = resultCache;
     }
 
     @Override
@@ -75,7 +78,15 @@ public class ModelApiAigcDetectionTool implements AgentTool {
                             "capabilityName", route.selected().displayName(),
                             "mediaType", mediaType,
                             "degraded", !route.unavailableRecommended().isEmpty()));
-            Map<String, Object> detection = adapter.analyze(stored.content(), asset.contentType());
+            String cacheIdentity = route.selected().code() + ":" + asset.sha256();
+            var cachedDetection = resultCache.get("aigc-primary", cacheIdentity);
+            Map<String, Object> detection = cachedDetection.orElseGet(() -> {
+                Map<String, Object> computed = adapter.analyze(stored.content(), asset.contentType());
+                resultCache.put("aigc-primary", cacheIdentity, computed);
+                return computed;
+            });
+            detection = new LinkedHashMap<>(detection);
+            detection.put("cacheHit", cachedDetection.isPresent());
             eventRecorder.recordAigc(
                     context,
                     taskId,

@@ -59,6 +59,8 @@ const stepLabels: Record<string, { name: string; description: string }> = {
   RESULT_EXPLANATION_STARTED: { name: '生成中文结果说明', description: 'LLM 正在整理模型信号、依据与限制' },
   RESULT_EXPLAINED: { name: '完成结果解释', description: '已生成可供人工核验的中文说明' },
   KNOWLEDGE_RETRIEVAL_RECORDED: { name: '记录知识依据', description: '保存本次 RAG 检索结果和引用来源' },
+  LIVE_RETRIEVAL_RECORDED: { name: '完成实时学术检索', description: '记录联网检索提供方、返回数量和可引用学术来源' },
+  PROVENANCE_VERIFIED: { name: '完成 C2PA 溯源校验', description: '检查内容凭证、签名及其与当前文件的绑定状态' },
   OBSERVATION_RECORDED: { name: '记录 Agent 观察', description: '将工具结果保存为待调查员确认的观察项' },
   CHECKPOINT_SAVED: { name: '保存运行检查点', description: '记录可恢复的任务执行进度' },
   CONCLUSION_SYNTHESIZED: { name: '汇总阶段性结论', description: '汇总已取得的事实和当前能力边界' },
@@ -74,6 +76,7 @@ const evidenceLabels: Record<string, string> = {
   IMAGE_METADATA: '图片元数据',
   PERCEPTUAL_SIMILARITY: '感知相似度',
   MEDIA_TYPE_CLASSIFICATION: 'CLIP 媒体类型',
+  CONTENT_PROVENANCE: 'C2PA 内容来源凭证',
   AIGC_DETECTION: 'AIGC 模型检测',
 }
 

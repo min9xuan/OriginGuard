@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
+import AccountMenu from '../components/AccountMenu.vue'
 import { useAuthStore } from '../stores/auth'
 
 const auth = useAuthStore()
 const route = useRoute()
-const router = useRouter()
 const navigation = computed(() => [
   { label: '管理概览', path: '/admin' },
   { label: '媒体资产', path: '/admin/assets', permission: 'asset:read' },
@@ -15,10 +15,6 @@ const navigation = computed(() => [
   { label: 'Agent 任务', path: '/admin/agent-tasks', permission: 'agent:trace:read' },
 ].filter((item) => !item.permission || auth.hasPermission(item.permission)))
 
-async function logout() {
-  await auth.logout()
-  await router.replace('/admin/login')
-}
 </script>
 
 <template>
@@ -29,10 +25,7 @@ async function logout() {
       <nav class="app-nav" aria-label="管理导航">
         <RouterLink v-for="item in navigation" :key="item.path" :to="item.path" :class="{ active: route.path === item.path || (item.path !== '/admin' && route.path.startsWith(item.path)) }">{{ item.label }}</RouterLink>
       </nav>
-      <div v-if="auth.user" class="sidebar-user">
-        <strong>{{ auth.user.displayName }}</strong><span>系统管理 · ADMIN</span>
-        <el-button text @click="logout">退出登录</el-button>
-      </div>
+      <div v-if="auth.user" class="sidebar-user"><AccountMenu logout-redirect="/admin/login" dark /></div>
     </aside>
     <section class="app-content"><RouterView /></section>
   </div>

@@ -7,6 +7,7 @@ import com.originguard.agent.domain.AgentObservation;
 import com.originguard.agent.domain.AgentStep;
 import com.originguard.agent.domain.AgentTask;
 import com.originguard.agent.domain.AgentTaskStatus;
+import com.originguard.agent.application.AgentProgressService;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
@@ -25,10 +26,12 @@ import tools.jackson.databind.ObjectMapper;
 public class AgentTaskRepository {
     private final JdbcClient jdbcClient;
     private final ObjectMapper objectMapper;
+    private final AgentProgressService progressService;
 
-    public AgentTaskRepository(JdbcClient jdbcClient, ObjectMapper objectMapper) {
+    public AgentTaskRepository(JdbcClient jdbcClient, ObjectMapper objectMapper, AgentProgressService progressService) {
         this.jdbcClient = jdbcClient;
         this.objectMapper = objectMapper;
+        this.progressService = progressService;
     }
 
     public AgentTask insertTask(
@@ -74,7 +77,7 @@ public class AgentTaskRepository {
     }
 
     public boolean markRunning(UUID tenantId, UUID taskId, long expectedVersion) {
-        return jdbcClient.sql("""
+        boolean updated = jdbcClient.sql("""
                         UPDATE agent_task
                         SET status = 'RUNNING', started_at = CURRENT_TIMESTAMP,
                             version = version + 1, updated_at = CURRENT_TIMESTAMP
@@ -85,6 +88,8 @@ public class AgentTaskRepository {
                 .param("taskId", taskId)
                 .param("expectedVersion", expectedVersion)
                 .update() == 1;
+        if (updated) progressService.publish(taskId, "TASK_RUNNING", Map.of("status", "RUNNING"));
+        return updated;
     }
 
     public boolean complete(
@@ -96,7 +101,7 @@ public class AgentTaskRepository {
             int remainingBudget,
             long checkpointVersion,
             Map<String, ?> conclusion) {
-        return jdbcClient.sql("""
+        boolean updated = jdbcClient.sql("""
                         UPDATE agent_task
                         SET status = 'COMPLETED', selected_skill_code = :skillCode,
                             selected_skill_version = :skillVersion,
@@ -117,6 +122,8 @@ public class AgentTaskRepository {
                 .param("taskId", taskId)
                 .param("expectedVersion", expectedVersion)
                 .update() == 1;
+        if (updated) progressService.publish(taskId, "TASK_COMPLETED", Map.of("status", "COMPLETED"));
+        return updated;
     }
 
     public void fail(UUID tenantId, UUID taskId, String code, String message) {
@@ -132,6 +139,8 @@ public class AgentTaskRepository {
                 .param("tenantId", tenantId)
                 .param("taskId", taskId)
                 .update();
+        progressService.publish(taskId, "TASK_FAILED", Map.of(
+                "status", "FAILED", "message", message == null ? "Agent execution failed" : message));
     }
 
     public boolean cancel(UUID tenantId, UUID taskId, long expectedVersion) {
@@ -186,7 +195,9 @@ public class AgentTaskRepository {
                 .param("input", toJson(input))
                 .param("output", toJson(output))
                 .update();
-        return findStep(tenantId, taskId, id).orElseThrow();
+        AgentStep step = findStep(tenantId, taskId, id).orElseThrow();
+        progressService.publish(taskId, stepType, Map.of("sequenceNumber", sequence, "status", status));
+        return step;
     }
 
     public AgentObservation insertObservation(

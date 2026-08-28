@@ -1,16 +1,12 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
+import AccountMenu from '../components/AccountMenu.vue'
 import { useAuthStore } from '../stores/auth'
 
 const auth = useAuthStore()
 const router = useRouter()
 const actionLabel = computed(() => auth.authenticated ? '进入工作台' : '登录后分析')
-
-async function logout() {
-  await auth.logout()
-  await router.push({ path: '/login', query: { switched: '1' } })
-}
 
 async function startAnalysis() {
   if (!auth.authenticated) {
@@ -32,12 +28,11 @@ async function startAnalysis() {
         <a href="#capabilities">能力</a>
         <a href="#architecture">架构</a>
         <a href="#workflow">工作方式</a>
+        <button v-if="!auth.authenticated" type="button" class="public-primary-action" @click="startAnalysis">{{ actionLabel }}</button>
+        <AccountMenu show-workspace />
         <a class="github-link" href="https://github.com/min9xuan/OriginGuard" target="_blank" rel="noreferrer" aria-label="在 GitHub 查看 OriginGuard" title="GitHub">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2C6.48 2 2 6.58 2 12.23c0 4.52 2.87 8.35 6.84 9.7.5.1.68-.22.68-.49 0-.24-.01-1.05-.02-1.9-2.78.62-3.37-1.2-3.37-1.2-.45-1.18-1.11-1.49-1.11-1.49-.91-.63.07-.62.07-.62 1 .08 1.53 1.06 1.53 1.06.9 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.64-1.37-2.22-.26-4.56-1.14-4.56-5.06 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.28 2.75 1.05A9.36 9.36 0 0 1 12 6.11c.85 0 1.7.12 2.5.35 1.91-1.33 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.93-2.34 4.8-4.57 5.05.36.32.68.94.68 1.9 0 1.37-.01 2.47-.01 2.81 0 .27.18.59.69.49A10.24 10.24 0 0 0 22 12.23C22 6.58 17.52 2 12 2Z"/></svg>
         </a>
-        <span v-if="auth.authenticated" class="public-session-state">{{ auth.user?.displayName }} · 已登录</span>
-        <button type="button" @click="startAnalysis">{{ actionLabel }}</button>
-        <button v-if="auth.authenticated" type="button" class="public-switch-account" @click="logout">切换账号</button>
       </nav>
     </header>
 
@@ -174,9 +169,6 @@ async function startAnalysis() {
 .github-link svg { width: 29px; height: 29px; fill: currentColor; }
 .public-nav nav button { min-height: 42px; padding: 0 20px; color: #fff; border: 1px solid #263143; background: #263143; font-weight: 700; cursor: pointer; }
 .public-nav nav button:hover { background: #131b27; }
-.public-session-state { color: #52606f; font-size: 12px; white-space: nowrap; }
-.public-nav nav .public-switch-account { min-height: 38px; padding: 0 14px; color: #3e4a59; border-color: #aeb7c1; background: transparent; font-size: 12px; }
-.public-nav nav .public-switch-account:hover { color: #fff; border-color: #263143; background: #263143; }
 .public-hero { position: relative; display: grid; min-height: 710px; align-items: end; overflow: hidden; padding: 140px clamp(24px, 7vw, 112px) 78px; color: #222b39; background: #eef0f3; }
 .public-hero::before { position: absolute; inset: 0; content: ""; opacity: .8; background: radial-gradient(circle at 78% 42%, rgba(188,200,207,.72), transparent 28%); }
 .public-hero::after { position: absolute; inset: 0; content: ""; opacity: .4; background-image: linear-gradient(rgba(156,166,176,.25) 1px, transparent 1px), linear-gradient(90deg, rgba(156,166,176,.25) 1px, transparent 1px); background-size: 72px 72px; }
@@ -249,7 +241,8 @@ async function startAnalysis() {
   .architecture-copy { width: min(760px, 100%); }
 }
 @media (max-width: 760px) {
-  .public-nav { height: 72px; }.public-logo small, .public-nav nav a:not(.github-link) { display: none; }.public-nav nav { gap: 12px; }.public-nav nav .github-link { padding-left: 0; border-left: 0; }
+  .public-nav { height: 72px; padding-inline: 14px; }.public-logo small, .public-nav nav a:not(.github-link) { display: none; }.public-nav nav { gap: 9px; }.public-nav nav .github-link { padding-left: 0; border-left: 0; }
+  .public-nav nav .public-primary-action { min-height: 38px; padding-inline: 12px; font-size: 12px; }
   .public-hero { min-height: 680px; padding-bottom: 58px; }.public-hero-art { top: 110px; right: -80px; width: 430px; height: 380px; opacity: .55; }
   .public-hero-copy { max-width: 100%; }.public-hero-copy h1 { font-size: clamp(40px, 11.5vw, 54px); line-height: 1.12; }.hero-summary { font-size: 16px; }
   .public-intro { grid-template-columns: 1fr; gap: 28px; padding-top: 88px; }

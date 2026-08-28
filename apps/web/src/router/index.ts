@@ -53,7 +53,12 @@ const router = createRouter({
 
 router.beforeEach(async (to) => {
   const auth = useAuthStore()
-  if (!auth.initialized) await auth.restoreSession()
+  if (!auth.initialized) {
+    // The public landing page must never wait on the backend before it can paint.
+    // Session restoration continues in the background and updates its actions in place.
+    if (to.path === '/') void auth.restoreSession()
+    else await auth.restoreSession()
+  }
   const isAdmin = auth.user?.roles.includes('ADMIN') ?? false
   if (to.path === '/login' && auth.authenticated) return isAdmin ? '/admin' : '/analyze'
   if (to.path === '/admin/login' && auth.authenticated) return isAdmin ? '/admin' : '/analyze'

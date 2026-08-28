@@ -1,6 +1,7 @@
 param(
     [switch]$SkipBackendBuild,
-    [int]$StartupTimeoutSeconds = 180
+    [int]$StartupTimeoutSeconds = 180,
+    [int]$BackendPort = 18080
 )
 
 $ErrorActionPreference = 'Stop'
@@ -21,6 +22,7 @@ $animeSource = Join-Path $runtimeRoot 'vendor-src\AnimeDL2M\AniXplore\IMDLBenCo'
 $animeCheckpoint = Join-Path $runtimeRoot 'models\anixplore\checkpoint.pth'
 $aerobladeSource = Join-Path $runtimeRoot 'vendor-src\aeroblade'
 $aerobladeReady = Join-Path $runtimeRoot 'models\aeroblade\ready'
+$c2paTool = Join-Path $runtimeRoot 'tools\c2patool\c2patool.exe'
 $llamaServer = Join-Path $runtimeRoot 'llama.cpp\bin\llama-server.exe'
 $qwenModel = Join-Path $runtimeRoot 'models\qwen3-vl-4b-instruct-gguf\Qwen3VL-4B-Instruct-Q4_K_M.gguf'
 $qwenProjector = Join-Path $runtimeRoot 'models\qwen3-vl-4b-instruct-gguf\mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf'
@@ -52,6 +54,18 @@ function Test-TcpPort([int]$Port) {
     } finally {
         $client.Dispose()
     }
+}
+
+function Wait-ForPortAvailable([string]$Name, [int]$Port, [int]$TimeoutSeconds = 30) {
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if (-not (Test-TcpPort $Port)) {
+            Start-Sleep -Milliseconds 750
+            if (-not (Test-TcpPort $Port)) { return }
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    throw "$Name cannot start because port $Port remained in use for $TimeoutSeconds seconds."
 }
 
 function Require-File([string]$Path, [string]$Description) {
@@ -97,7 +111,10 @@ function Wait-ForHttp([string]$Name, [string]$Url, [System.Diagnostics.Process]$
     while ([DateTime]::UtcNow -lt $deadline) {
         if ($Process.HasExited) {
             $stderr = Join-Path $logRoot "$Name.stderr.log"
-            $tail = if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr -Tail 30 } else { @() }
+            $stdout = Join-Path $logRoot "$Name.stdout.log"
+            $tail = @()
+            if (Test-Path -LiteralPath $stdout) { $tail += Get-Content -LiteralPath $stdout -Tail 40 }
+            if (Test-Path -LiteralPath $stderr) { $tail += Get-Content -LiteralPath $stderr -Tail 40 }
             throw "$Name exited during startup.`n$($tail -join [Environment]::NewLine)"
         }
         try {
@@ -167,7 +184,7 @@ $node = (Get-Command node -ErrorAction Stop).Source
 if (-not (Get-Command mvn -ErrorAction SilentlyContinue)) { throw 'Maven was not found in PATH.' }
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw 'Docker CLI was not found in PATH.' }
 
-foreach ($port in 5173, 8080, 8090, 8092) {
+foreach ($port in 5173, $BackendPort, 8090, 8091, 8092, 6379, 25672, 15672) {
     if (Test-TcpPort $port) {
         throw "Port $port is already in use. Stop the existing service before starting OriginGuard."
     }
@@ -184,8 +201,8 @@ try {
     }
     Push-Location $repositoryRoot
     try {
-        docker compose up -d postgres minio
-        if ($LASTEXITCODE -ne 0) { throw 'Unable to start PostgreSQL and MinIO.' }
+        docker compose up -d postgres minio redis rabbitmq
+        if ($LASTEXITCODE -ne 0) { throw 'Unable to start PostgreSQL, MinIO, Redis and RabbitMQ.' }
     } finally {
         Pop-Location
     }
@@ -214,6 +231,14 @@ try {
     ) $repositoryRoot
     Wait-ForHttp 'model-api' 'http://127.0.0.1:8090/health' $embedding
 
+    $env:C2PATOOL_PATH = if (Test-Path -LiteralPath $c2paTool -PathType Leaf) { $c2paTool } else { '' }
+    $c2pa = Start-ManagedProcess 'c2pa-sidecar' $python @(
+        '-m', 'uvicorn', 'originguard_c2pa_sidecar.main:app',
+        '--app-dir', (Join-Path $repositoryRoot 'services\c2pa-sidecar\src'),
+        '--host', '127.0.0.1', '--port', '8091'
+    ) $repositoryRoot
+    Wait-ForHttp 'c2pa-sidecar' 'http://127.0.0.1:8091/health' $c2pa
+
     $qwen = Start-ManagedProcess 'qwen-vl' $llamaServer @(
         '--model', $qwenModel, '--mmproj', $qwenProjector,
         '--alias', 'qwen3-vl-4b-instruct-q4-k-m',
@@ -231,6 +256,15 @@ try {
     $env:ANIXPLORE_ENABLED = if (Test-Path -LiteralPath $animeCheckpoint -PathType Leaf) { 'true' } else { 'false' }
     $env:AEROBLADE_ENABLED = if (Test-Path -LiteralPath $aerobladeReady -PathType Leaf) { 'true' } else { 'false' }
     $env:QWEN_VL_BASE_URL = 'http://127.0.0.1:8092'
+    $env:AGENT_ASYNC_ENABLED = 'true'
+    $env:C2PA_ENABLED = 'true'
+    $env:C2PA_BASE_URL = 'http://127.0.0.1:8091'
+    $env:REDIS_HOST = '127.0.0.1'
+    $env:REDIS_PORT = '6379'
+    $env:RABBITMQ_HOST = '127.0.0.1'
+    $env:RABBITMQ_PORT = '25672'
+    $env:SERVER_PORT = [string]$BackendPort
+    $env:VITE_API_TARGET = "http://127.0.0.1:$BackendPort"
     if (-not $SkipBackendBuild) {
         Push-Location $serverDirectory
         try {
@@ -241,8 +275,22 @@ try {
         }
     }
     Require-File $serverJar 'OriginGuard backend JAR'
+    Wait-ForPortAvailable 'OriginGuard backend' $BackendPort
     $backend = Start-ManagedProcess 'server' $java @('-jar', $serverJar) $serverDirectory
-    Wait-ForHttp 'server' 'http://127.0.0.1:8080/actuator/health' $backend
+    try {
+        Wait-ForHttp 'server' "http://127.0.0.1:$BackendPort/actuator/health" $backend
+    } catch {
+        $serverLog = Join-Path $logRoot 'server.stdout.log'
+        $portConflict = $backend.HasExited -and
+            (Test-Path -LiteralPath $serverLog) -and
+            ((Get-Content -Raw -LiteralPath $serverLog) -match "Port $BackendPort was already in use")
+        if (-not $portConflict) { throw }
+
+        Write-Warning "Port $BackendPort was occupied while the backend was binding; waiting and retrying once."
+        Wait-ForPortAvailable 'OriginGuard backend' $BackendPort 45
+        $backend = Start-ManagedProcess 'server' $java @('-jar', $serverJar) $serverDirectory
+        Wait-ForHttp 'server' "http://127.0.0.1:$BackendPort/actuator/health" $backend
+    }
 
     $web = Start-ManagedProcess 'web' $node @(
         $viteEntry, '--host', '127.0.0.1', '--port', '5173', '--strictPort'
@@ -252,9 +300,12 @@ try {
     Write-Host ''
     Write-Host 'OriginGuard local stack is ready.' -ForegroundColor Green
     Write-Host '  Web:       http://127.0.0.1:5173'
-    Write-Host '  Backend:   http://127.0.0.1:8080'
+    Write-Host "  Backend:   http://127.0.0.1:$BackendPort"
     Write-Host '  Model API: http://127.0.0.1:8090 (Embedding + AIGC detection + media classification)'
     Write-Host '  Qwen API:  http://127.0.0.1:8092'
+    Write-Host '  RabbitMQ:  http://127.0.0.1:15672'
+    Write-Host '  AMQP:      127.0.0.1:25672'
+    Write-Host '  Redis:     127.0.0.1:6379'
     Write-Host "  Logs:      $logRoot"
     Write-Host 'Stop with: .\scripts\stop-local-stack.ps1'
 } catch {
@@ -263,7 +314,7 @@ try {
     if ((Get-Command docker -ErrorAction SilentlyContinue) -and (Test-DockerReady)) {
         Push-Location $repositoryRoot
         try {
-            try { docker compose stop postgres minio 2>&1 | Out-Null } catch {}
+            try { docker compose stop postgres minio redis rabbitmq 2>&1 | Out-Null } catch {}
         } finally {
             Pop-Location
         }

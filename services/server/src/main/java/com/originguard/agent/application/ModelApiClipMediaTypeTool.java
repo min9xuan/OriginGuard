@@ -29,13 +29,16 @@ public class ModelApiClipMediaTypeTool implements AgentTool {
     private final HttpClient client;
     private final URI endpoint;
     private final Duration timeout;
+    private final ForensicResultCache resultCache;
 
     public ModelApiClipMediaTypeTool(
             MediaAssetService mediaAssetService,
+            ForensicResultCache resultCache,
             @Value("${originguard.agent.media-type-classifier.base-url:http://127.0.0.1:8090}")
                     String baseUrl,
             @Value("${originguard.agent.media-type-classifier.timeout:PT2M}") Duration timeout) {
         this.mediaAssetService = mediaAssetService;
+        this.resultCache = resultCache;
         this.timeout = timeout;
         this.client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build();
         this.endpoint = URI.create(baseUrl.replaceAll("/+$", "") + "/v1/media/classify");
@@ -53,8 +56,14 @@ public class ModelApiClipMediaTypeTool implements AgentTool {
             if (!asset.contentType().startsWith("image/")) continue;
             MediaAssetService.StoredMedia stored =
                     mediaAssetService.readStored(context.actor().tenantId(), asset.id());
-            Map<String, Object> classification = classify(stored.content(), asset.contentType());
+            var cached = resultCache.get("media-type", asset.sha256());
+            Map<String, Object> classification = cached.orElseGet(() -> {
+                Map<String, Object> computed = classify(stored.content(), asset.contentType());
+                resultCache.put("media-type", asset.sha256(), computed);
+                return computed;
+            });
             Map<String, Object> finding = new LinkedHashMap<>(classification);
+            finding.put("cacheHit", cached.isPresent());
             finding.put("assetId", asset.id().toString());
             finding.put("filename", asset.originalFilename());
             findings.add(Map.copyOf(finding));

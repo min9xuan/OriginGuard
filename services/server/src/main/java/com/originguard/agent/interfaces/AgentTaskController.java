@@ -2,7 +2,11 @@ package com.originguard.agent.interfaces;
 
 import com.originguard.agent.application.AgentTaskService;
 import com.originguard.agent.application.ForensicModelRegistry;
+import com.originguard.agent.application.AgentProgressService;
+import com.originguard.agent.application.AgentTaskDispatcher;
 import com.originguard.agent.domain.AgentTask;
+import com.originguard.identity.application.CurrentActorProvider;
+import com.originguard.shared.application.RedisRateLimiter;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -24,16 +28,28 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import org.springframework.beans.factory.ObjectProvider;
 
 @RestController
 @RequestMapping("/api/v1/agent-tasks")
 public class AgentTaskController {
     private final AgentTaskService service;
     private final ForensicModelRegistry modelRegistry;
+    private final AgentProgressService progressService;
+    private final ObjectProvider<AgentTaskDispatcher> dispatcher;
+    private final RedisRateLimiter rateLimiter;
+    private final CurrentActorProvider actorProvider;
 
-    public AgentTaskController(AgentTaskService service, ForensicModelRegistry modelRegistry) {
+    public AgentTaskController(AgentTaskService service, ForensicModelRegistry modelRegistry,
+            AgentProgressService progressService, ObjectProvider<AgentTaskDispatcher> dispatcher,
+            RedisRateLimiter rateLimiter, CurrentActorProvider actorProvider) {
         this.service = service;
         this.modelRegistry = modelRegistry;
+        this.progressService = progressService;
+        this.dispatcher = dispatcher;
+        this.rateLimiter = rateLimiter;
+        this.actorProvider = actorProvider;
     }
 
     @PostMapping
@@ -63,6 +79,13 @@ public class AgentTaskController {
         return service.get(taskId);
     }
 
+    @GetMapping(value = "/{taskId}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @PreAuthorize("hasAuthority('agent:trace:read')")
+    public SseEmitter events(@PathVariable UUID taskId) {
+        service.get(taskId);
+        return progressService.subscribe(taskId);
+    }
+
     @DeleteMapping("/{taskId}")
     @PreAuthorize("hasAuthority('agent:run')")
     public ResponseEntity<Void> delete(@PathVariable UUID taskId) {
@@ -87,9 +110,14 @@ public class AgentTaskController {
 
     @PostMapping("/{taskId}/run")
     @PreAuthorize("hasAuthority('agent:run')")
-    public AgentTaskService.AgentTaskDetails run(
+    public ResponseEntity<AgentTaskService.AgentTaskDetails> run(
             @PathVariable UUID taskId, @Valid @RequestBody VersionRequest request) {
-        return service.run(taskId, request.version());
+        rateLimiter.requireAllowed(actorProvider.getRequiredActor().userId(), "agent-run");
+        AgentTaskDispatcher async = dispatcher.getIfAvailable();
+        if (async == null) return ResponseEntity.ok(service.run(taskId, request.version()));
+        var details = service.get(taskId);
+        async.enqueue(taskId, details.task().createdBy(), request.version(), null, null, null);
+        return ResponseEntity.accepted().body(service.get(taskId));
     }
 
     @PostMapping("/{taskId}/cancel")
