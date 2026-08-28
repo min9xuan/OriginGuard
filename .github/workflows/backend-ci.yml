@@ -18,7 +18,7 @@ jobs:
       - run: mvn --batch-mode verify
       - name: Upload backend test reports
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: backend-test-reports
           path: services/server/target/surefire-reports/
