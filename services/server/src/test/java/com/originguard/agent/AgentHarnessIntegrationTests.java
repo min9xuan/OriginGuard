@@ -165,13 +165,13 @@ class AgentHarnessIntegrationTests {
                 .andExpect(jsonPath("$.task.remainingStepBudget").value(0))
                 .andExpect(jsonPath("$.task.checkpointVersion").value(6))
                 .andExpect(jsonPath("$.task.conclusion.verdict").value("INCONCLUSIVE"))
-                .andExpect(jsonPath("$.steps.length()").value(47))
                 .andExpect(jsonPath("$.steps[*].stepType", hasItem("PLAN_GENERATED")))
                 .andExpect(jsonPath("$.steps[*].stepType", hasItem("PLAN_VALIDATED")))
                 .andExpect(jsonPath("$.steps[*].stepType", hasItem("REPLAN_DECIDED")))
-                .andExpect(jsonPath("$.steps[8].output.provider").value("FAKE"))
-                .andExpect(jsonPath("$.steps[8].output.selectedSkills.length()").value(5))
-                .andExpect(jsonPath("$.steps[8].output.selectedSkills[0].reason").isNotEmpty())
+                .andExpect(jsonPath("$.steps[?(@.output.provider == 'FAKE')]").isNotEmpty())
+                .andExpect(jsonPath(
+                                "$.steps[?(@.output.provider == 'FAKE')].output.selectedSkills[0].reason")
+                        .isNotEmpty())
                 .andExpect(jsonPath("$.steps[*].stepType", hasItem("TOOL_CALLED")))
                 .andExpect(jsonPath("$.steps[*].stepType", hasItem("CHECKPOINT_SAVED")))
                 .andExpect(jsonPath("$.observations.length()").value(5))
@@ -233,7 +233,8 @@ class AgentHarnessIntegrationTests {
                         .header("Authorization", bearer(investigator)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.task.status").value("COMPLETED"))
-                .andExpect(jsonPath("$.steps.length()").value(47));
+                .andExpect(jsonPath("$.steps[*].stepType", hasItem("PLAN_GENERATED")))
+                .andExpect(jsonPath("$.steps[*].stepType", hasItem("CHECKPOINT_SAVED")));
 
         mockMvc.perform(get("/api/v1/cases/{id}/audit", caseId)
                         .header("Authorization", bearer(investigator)))

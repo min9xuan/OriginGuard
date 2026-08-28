@@ -12,7 +12,14 @@ jobs:
       run:
         working-directory: services/server
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
         with: { distribution: temurin, java-version: 22, cache: maven }
       - run: mvn --batch-mode verify
+      - name: Upload backend test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-reports
+          path: services/server/target/surefire-reports/
+          if-no-files-found: warn
