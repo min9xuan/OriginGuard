@@ -24,16 +24,17 @@ class AigcEvidenceFusionTests {
     }
 
     @Test
-    void routesCartoonWithoutDiscardingAidePreliminaryConclusion() {
+    void routesDigitalIllustrationWithoutDiscardingAidePreliminaryConclusion() {
         Map<String, Object> result = fusion.fuse(
                 primary("LIKELY_SYNTHETIC", 0.91),
-                mediaType("ILLUSTRATION_CARTOON", "插画或卡通"),
+                mediaType("DIGITAL_ILLUSTRATION", "数字插画或绘画"),
                 quality("PASS"));
 
         assertThat(result).containsEntry("verdict", "LIKELY_SYNTHETIC");
         assertThat(result).containsEntry("agreement", "PRELIMINARY_WITH_TYPE_CONTEXT");
         assertThat(result).containsEntry("decisionReady", true);
-        assertThat(result).containsEntry("recommendedDomainDetector", "CARTOON_AIGC_DETECTOR");
+        assertThat(result).containsEntry("recommendedDomainDetector", "CROSS_DOMAIN_ILLUSTRATION_AIGC_DETECTOR");
+        assertThat(result).containsEntry("specializedDetectorStatus", "NOT_CONFIGURED");
         assertThat(result.get("limitations").toString()).contains("专用 AIGC 检测模型");
     }
 
@@ -67,7 +68,7 @@ class AigcEvidenceFusionTests {
     void explainsThatDirectionalClipCannotReplaceInconclusiveAide() {
         Map<String, Object> result = fusion.fuse(
                 primary("INCONCLUSIVE", 0.5),
-                mediaType("ILLUSTRATION_CARTOON", "插画或卡通"),
+                mediaType("ANIME_MANGA", "动漫或漫画"),
                 quality("PASS"));
 
         assertThat(result).containsEntry("verdict", "INCONCLUSIVE");
@@ -90,11 +91,11 @@ class AigcEvidenceFusionTests {
     @Test
     void recordsSpecializedCartoonDetectionAndUncalibratedDiffusionObservation() {
         Map<String, Object> specialized = new LinkedHashMap<>(primary("LIKELY_SYNTHETIC", 0.82));
-        specialized.put("provider", "ILLUSTRATION_AIGC_DETECTOR");
+        specialized.put("provider", "ANIME_AIGC_DETECTOR");
 
         Map<String, Object> result = fusion.fuse(
                 Map.copyOf(specialized),
-                mediaType("ILLUSTRATION_CARTOON", "插画或卡通"),
+                mediaType("ANIME_MANGA", "动漫或漫画"),
                 quality("PASS"),
                 Map.of("status", "SUCCEEDED", "classification", "INCONCLUSIVE", "calibrated", false));
 
@@ -102,6 +103,40 @@ class AigcEvidenceFusionTests {
         assertThat(result).containsEntry("secondaryVerificationStatus", "SUCCEEDED");
         assertThat(result.get("reasons").toString()).contains("专用模型");
         assertThat(result.get("limitations").toString()).contains("尚未配置验证集阈值");
+    }
+
+    @Test
+    void raisesConfidenceWhenAnimeAndGenericModelsAgree() {
+        Map<String, Object> specialized = new LinkedHashMap<>(primary("LIKELY_SYNTHETIC", 0.72));
+        specialized.put("provider", "ANIME_AIGC_DETECTOR");
+
+        Map<String, Object> result = fusion.fuse(
+                Map.copyOf(specialized),
+                mediaType("ANIME_MANGA", "动漫或漫画"),
+                quality("PASS"),
+                Map.of(),
+                Map.of("status", "SUCCEEDED", "classification", "LIKELY_SYNTHETIC"));
+
+        assertThat(result).containsEntry("verdict", "LIKELY_SYNTHETIC");
+        assertThat(result).containsEntry("agreement", "DOMAIN_AND_GENERAL_AGREE");
+        assertThat(result).containsEntry("crossDomainVerificationStatus", "SUCCEEDED");
+    }
+
+    @Test
+    void returnsConflictWhenAnimeAndGenericModelsDisagree() {
+        Map<String, Object> specialized = new LinkedHashMap<>(primary("LIKELY_SYNTHETIC", 0.76));
+        specialized.put("provider", "ANIME_AIGC_DETECTOR");
+
+        Map<String, Object> result = fusion.fuse(
+                Map.copyOf(specialized),
+                mediaType("ANIME_MANGA", "动漫或漫画"),
+                quality("PASS"),
+                Map.of(),
+                Map.of("status", "SUCCEEDED", "classification", "LIKELY_AUTHENTIC"));
+
+        assertThat(result).containsEntry("verdict", "CONFLICTING_EVIDENCE");
+        assertThat(result).containsEntry("agreement", "DOMAIN_AND_GENERAL_CONFLICT");
+        assertThat(result).containsEntry("decisionReady", false);
     }
 
     private Map<String, Object> primary(String classification, double syntheticProbability) {

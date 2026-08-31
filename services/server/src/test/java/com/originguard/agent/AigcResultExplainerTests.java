@@ -22,7 +22,7 @@ class AigcResultExplainerTests {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/v1/chat/completions", exchange -> {
             String request = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-            assertThat(request).contains("originguard_aigc_detection_explanation", "image_url", "插画或卡通", "仅原始图像");
+            assertThat(request).contains("originguard_aigc_detection_explanation", "image_url", "动漫或漫画", "仅原始图像");
             byte[] response = """
                     {"choices":[{"message":{"content":"{\\"summary\\":\\"模型结果需要人工复核。\\",\\"supportingSignals\\":[\\"注意力集中在主体区域。\\"],\\"counterSignals\\":[\\"截图压缩可能影响结果。\\"],\\"limitations\\":[\\"热力图不是生成区域。\\"]}"}}]}
                     """.getBytes(StandardCharsets.UTF_8);
@@ -52,7 +52,7 @@ class AigcResultExplainerTests {
         Map<String, Object> explanation = explainer.explain(
                 "image.png", imageBytes(), imageBytes(), detection());
         assertThat(explanation).containsEntry("source", "DETERMINISTIC_TEMPLATE");
-        assertThat(String.valueOf(explanation.get("summary"))).contains("插画或卡通", "91.0%", "专用检测模型");
+        assertThat(String.valueOf(explanation.get("summary"))).contains("动漫或漫画", "91.0%", "交叉复核");
     }
 
     @Test
@@ -60,7 +60,8 @@ class AigcResultExplainerTests {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/v1/chat/completions", exchange -> {
             String request = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-            assertThat(request).contains("originguard_agent_preliminary_assessment", "0.5", "CARTOON_AIGC_DETECTOR");
+            assertThat(request).contains(
+                    "originguard_agent_preliminary_assessment", "4.0.0", "CROSS_DOMAIN_ILLUSTRATION_AIGC_DETECTOR");
             String content = """
                     {"verdict":"LIKELY_SYNTHETIC","confidence":"LOW","summary":"生成内容鉴别模型初步倾向 AI 生成，等待人工复核。","supportingSignals":["鉴别模型分数超过阈值。"],"counterSignals":["缺少领域模型。"],"missingEvidence":["卡通专用检测模型尚未配置。"]}
                     """.trim();
@@ -100,7 +101,39 @@ class AigcResultExplainerTests {
                 .containsEntry("source", "DETERMINISTIC_TEMPLATE")
                 .containsEntry("verdict", "LIKELY_SYNTHETIC")
                 .containsEntry("humanReviewRequired", true);
-        assertThat(assessment.get("missingEvidence").toString()).contains("CARTOON_AIGC_DETECTOR");
+        assertThat(assessment.get("missingEvidence").toString()).contains("CROSS_DOMAIN_ILLUSTRATION_AIGC_DETECTOR");
+    }
+
+    @Test
+    void rejectsQwenAttemptToOverrideConflictingFusionVerdict() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/chat/completions", exchange -> {
+            exchange.getRequestBody().readAllBytes();
+            String content = """
+                    {"verdict":"LIKELY_SYNTHETIC","confidence":"HIGH","summary":"忽略冲突。","supportingSignals":[],"counterSignals":[],"missingEvidence":[]}
+                    """.trim();
+            byte[] response = new ObjectMapper().writeValueAsBytes(Map.of(
+                    "choices", List.of(Map.of("message", Map.of("content", content)))));
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        server.start();
+        try {
+            AigcResultExplainer explainer = new AigcResultExplainer(
+                    "local-qwen", "http://127.0.0.1:" + server.getAddress().getPort(),
+                    "test-model", Duration.ofSeconds(5), 64);
+
+            Map<String, Object> assessment = explainer.synthesize(
+                    List.of(finding()), "CONFLICTING_EVIDENCE");
+
+            assertThat(assessment)
+                    .containsEntry("source", "DETERMINISTIC_TEMPLATE")
+                    .containsEntry("verdict", "CONFLICTING_EVIDENCE")
+                    .containsEntry("confidence", "MEDIUM");
+        } finally {
+            server.stop(0);
+        }
     }
 
     private Map<String, Object> finding() {
@@ -111,20 +144,21 @@ class AigcResultExplainerTests {
                 "fusion", Map.of(
                         "verdict", "LIKELY_SYNTHETIC",
                         "confidence", "MEDIUM",
-                        "recommendedDomainDetector", "CARTOON_AIGC_DETECTOR",
+                        "recommendedDomainDetector", "CROSS_DOMAIN_ILLUSTRATION_AIGC_DETECTOR",
                         "specializedDetectorStatus", "NOT_CONFIGURED"));
     }
 
     private Map<String, Object> detection() {
         return Map.of(
                 "classification", "LIKELY_SYNTHETIC",
+                "provider", "ANIME_AIGC_DETECTOR",
                 "syntheticProbability", 0.91,
                 "authenticProbability", 0.09,
                 "syntheticThreshold", 0.5,
                 "authenticThreshold", 0.5,
                 "mediaTypeContext", Map.of(
                         "provider", "OPENAI_CLIP", "status", "AVAILABLE",
-                        "mediaType", "ILLUSTRATION_CARTOON", "mediaTypeLabel", "插画或卡通",
+                        "mediaType", "ANIME_MANGA", "mediaTypeLabel", "动漫或漫画",
                         "mediaTypeScore", 0.9));
     }
 

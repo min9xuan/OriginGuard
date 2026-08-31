@@ -9,7 +9,7 @@ from originguard_model_api.aide import (
     ImageQualityAssessment,
     LocalAideDetector,
 )
-from originguard_model_api.anime_detector import AnimeDetection
+from originguard_model_api.anime_detector import AnimeDetection, LocalAnimeDetector
 from originguard_model_api.clip_detector import ClipDetection
 from originguard_model_api.diffusion_verifier import DiffusionVerification
 from originguard_model_api.main import (
@@ -86,13 +86,15 @@ class FakeClipDetector:
             modelVersion="test",
             promptVersion="3.0.0",
             device="cpu",
-            mediaType="ILLUSTRATION_CARTOON",
-            mediaTypeLabel="插画或卡通",
+            mediaType="ANIME_MANGA",
+            mediaTypeLabel="动漫或漫画",
             mediaTypeScore=0.82,
             mediaTypeMargin=0.57,
             mediaTypeScores={
                 "PHOTOGRAPH": 0.05,
-                "ILLUSTRATION_CARTOON": 0.82,
+                "ANIME_MANGA": 0.82,
+                "DIGITAL_ILLUSTRATION": 0.01,
+                "VECTOR_CARTOON": 0.01,
                 "THREE_D_RENDER": 0.08,
                 "DOCUMENT_SCREENSHOT": 0.03,
                 "DIAGRAM_GRAPHIC": 0.02,
@@ -107,19 +109,23 @@ class FakeAnimeDetector:
     loaded = True
     configured = True
     device_name = "cuda"
+    synthetic_threshold = 0.65
+    authentic_threshold = 0.35
+    checkpoint_integrity_verified = True
 
     def detect(self, content: bytes) -> AnimeDetection:
         return AnimeDetection(
-            provider="ILLUSTRATION_AIGC_DETECTOR",
-            model="Illustration and cartoon generative-content detector",
+            provider="ANIME_AIGC_DETECTOR",
+            model="AniXplore anime generation and manipulation detector",
             modelVersion="test",
             checkpointSha256="b" * 64,
+            checkpointIntegrityVerified=True,
             device="cuda",
             syntheticProbability=0.87,
             authenticProbability=0.13,
             classification="LIKELY_SYNTHETIC",
-            syntheticThreshold=0.5,
-            authenticThreshold=0.5,
+            syntheticThreshold=0.65,
+            authenticThreshold=0.35,
             width=512,
             height=512,
             processingMilliseconds=20,
@@ -214,8 +220,8 @@ def test_clip_media_type_contract_without_loading_model() -> None:
     assert response.json()["role"] == "MEDIA_TYPE_CONTEXT"
     assert "classification" not in response.json()
     assert "semanticSyntheticScore" not in response.json()
-    assert response.json()["mediaType"] == "ILLUSTRATION_CARTOON"
-    assert response.json()["mediaTypeLabel"] == "插画或卡通"
+    assert response.json()["mediaType"] == "ANIME_MANGA"
+    assert response.json()["mediaTypeLabel"] == "动漫或漫画"
 
 
 def test_anime_detection_contract_without_loading_model() -> None:
@@ -227,8 +233,17 @@ def test_anime_detection_contract_without_loading_model() -> None:
     finally:
         app.dependency_overrides.clear()
     assert response.status_code == 200
-    assert response.json()["provider"] == "ILLUSTRATION_AIGC_DETECTOR"
+    assert response.json()["provider"] == "ANIME_AIGC_DETECTOR"
     assert response.json()["localizationMethod"] == "PIXEL_LEVEL_GENERATION_MASK"
+    assert response.json()["checkpointIntegrityVerified"] is True
+
+
+def test_anime_detector_uses_conservative_uncertainty_band() -> None:
+    detector = LocalAnimeDetector(Path.cwd(), Path.cwd() / ".runtime-does-not-exist")
+
+    assert detector._classify(0.66) == "LIKELY_SYNTHETIC"
+    assert detector._classify(0.34) == "LIKELY_AUTHENTIC"
+    assert detector._classify(0.50) == "INCONCLUSIVE"
 
 
 def test_diffusion_verification_does_not_mislabel_distance_as_probability() -> None:

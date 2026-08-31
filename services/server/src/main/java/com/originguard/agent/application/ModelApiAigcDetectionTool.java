@@ -94,6 +94,8 @@ public class ModelApiAigcDetectionTool implements AgentTool {
                     Map.of("assetId", asset.id().toString(), "capabilityCode", route.selected().code()),
                     compactDetectionEvent(route, detection));
             Map<String, Object> quality = objectMap(detection.get("qualityAssessment"));
+            Map<String, Object> crossDomainVerification = runCrossDomainVerification(
+                    context, taskId, asset, stored.content(), route);
             Map<String, Object> secondaryVerification = runDiffusionVerificationIfUseful(
                     context, taskId, asset, stored.content(), mediaType, detection);
             eventRecorder.recordAigc(
@@ -101,8 +103,9 @@ public class ModelApiAigcDetectionTool implements AgentTool {
                     taskId,
                     "EVIDENCE_FUSION_STARTED",
                     Map.of("assetId", asset.id().toString()),
-                    Map.of("message", "正在合并主检测、媒体类型、图像质量与扩散复核信号"));
-            Map<String, Object> fusion = evidenceFusion.fuse(detection, mediaTypeContext, quality, secondaryVerification);
+                    Map.of("message", "正在合并领域模型、通用模型、媒体类型、图像质量与扩散复核信号"));
+            Map<String, Object> fusion = evidenceFusion.fuse(
+                    detection, mediaTypeContext, quality, secondaryVerification, crossDomainVerification);
             eventRecorder.recordAigc(
                     context,
                     taskId,
@@ -137,11 +140,13 @@ public class ModelApiAigcDetectionTool implements AgentTool {
             }
             finding.put("mediaTypeContext", mediaTypeContext);
             finding.put("modelRouting", route.toMap());
+            finding.put("crossDomainVerification", crossDomainVerification);
             finding.put("secondaryVerification", secondaryVerification);
             finding.put("fusion", fusion);
             Map<String, Object> explanationInput = new LinkedHashMap<>(detection);
             explanationInput.put("mediaTypeContext", mediaTypeContext);
             explanationInput.put("fusion", fusion);
+            explanationInput.put("crossDomainVerification", crossDomainVerification);
             explanationInput.put("secondaryVerification", secondaryVerification);
             eventRecorder.recordAigc(
                     context,
@@ -193,6 +198,64 @@ public class ModelApiAigcDetectionTool implements AgentTool {
         output.put("capabilityCatalog", modelRegistry.catalog());
         output.put("limitations", first.getOrDefault("limitations", List.of()));
         return Map.copyOf(output);
+    }
+
+    private Map<String, Object> runCrossDomainVerification(
+            AgentExecutionContext context,
+            UUID taskId,
+            MediaAsset asset,
+            byte[] content,
+            ForensicModelRegistry.ModelRoute route) {
+        if (!"ANIME_MANGA".equals(route.mediaType())) return Map.of("status", "NOT_REQUIRED");
+        var candidate = route.availableCandidates().stream()
+                .filter(capability -> !capability.code().equals(route.selected().code()))
+                .filter(capability -> capability.mediaTypes().contains(ForensicModelCapability.ANY_MEDIA_TYPE))
+                .findFirst();
+        if (candidate.isEmpty()) {
+            return Map.of("status", "UNAVAILABLE", "reason", "未找到可用的跨域通用模型");
+        }
+        ForensicModelCapability capability = candidate.get();
+        eventRecorder.recordAigc(
+                context,
+                taskId,
+                "CROSS_DOMAIN_MODEL_STARTED",
+                Map.of("assetId", asset.id().toString(), "capabilityCode", capability.code()),
+                Map.of("message", "正在使用通用生成内容鉴别模型交叉复核动漫专用模型"));
+        try {
+            ForensicModelAdapter adapter = modelRegistry.requireAdapter(capability.code());
+            String cacheIdentity = capability.code() + ":" + asset.sha256();
+            var cached = resultCache.get("aigc-cross-domain", cacheIdentity);
+            Map<String, Object> result = new LinkedHashMap<>(cached.orElseGet(() -> {
+                Map<String, Object> computed = adapter.analyze(content, asset.contentType());
+                resultCache.put("aigc-cross-domain", cacheIdentity, computed);
+                return computed;
+            }));
+            result.put("status", "SUCCEEDED");
+            result.put("cacheHit", cached.isPresent());
+            result.put("capability", capability.toMap(true));
+            eventRecorder.recordAigc(
+                    context,
+                    taskId,
+                    "CROSS_DOMAIN_MODEL_COMPLETED",
+                    Map.of("assetId", asset.id().toString(), "capabilityCode", capability.code()),
+                    Map.of(
+                            "message", "通用模型交叉复核已完成",
+                            "classification", result.getOrDefault("classification", "INCONCLUSIVE"),
+                            "syntheticProbability", result.getOrDefault("syntheticProbability", "UNAVAILABLE")));
+            return Map.copyOf(result);
+        } catch (RuntimeException exception) {
+            eventRecorder.recordAigc(
+                    context,
+                    taskId,
+                    "CROSS_DOMAIN_MODEL_UNAVAILABLE",
+                    Map.of("assetId", asset.id().toString(), "capabilityCode", capability.code()),
+                    Map.of("message", "通用模型交叉复核当前不可用，保留领域模型结果"));
+            return Map.of(
+                    "status", "UNAVAILABLE",
+                    "reason", "通用模型交叉复核执行失败",
+                    "detail", exception.getMessage() == null
+                            ? exception.getClass().getSimpleName() : exception.getMessage());
+        }
     }
 
     private Map<String, Object> runDiffusionVerificationIfUseful(

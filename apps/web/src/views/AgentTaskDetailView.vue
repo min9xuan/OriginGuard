@@ -76,7 +76,8 @@ const replanSteps = computed(() => details.value?.steps.filter((step) =>
 ) ?? [])
 const completedToolSteps = computed(() => details.value?.steps.filter((step) => step.stepType === 'TOOL_CALLED') ?? [])
 const modelExecutionSteps = computed(() => details.value?.steps.filter((step) => [
-  'PRIMARY_MODEL_COMPLETED', 'SECONDARY_MODEL_COMPLETED', 'EVIDENCE_FUSED', 'RESULT_EXPLAINED',
+  'PRIMARY_MODEL_COMPLETED', 'CROSS_DOMAIN_MODEL_COMPLETED', 'SECONDARY_MODEL_COMPLETED',
+  'EVIDENCE_FUSED', 'RESULT_EXPLAINED',
 ].includes(step.stepType)) ?? [])
 const fallbackSteps = computed(() => replanSteps.value.filter((step) => step.stepType === 'REPLAN_FALLBACK'))
 const acceptedDecisionSteps = computed(() => replanSteps.value.filter((step) => step.stepType === 'REPLAN_DECIDED'))
@@ -309,9 +310,25 @@ function secondaryVerificationFor(observation: AgentObservation) {
   return objectValue(observation.payload.secondaryVerification)
 }
 
+function crossDomainVerificationFor(observation: AgentObservation) {
+  return objectValue(observation.payload.crossDomainVerification)
+}
+
+function crossDomainLabel(observation: AgentObservation) {
+  const verification = crossDomainVerificationFor(observation)
+  const status = String(verification.status || 'NOT_REQUIRED')
+  if (status === 'SUCCEEDED') {
+    return `${verdictLabel(String(verification.classification || 'INCONCLUSIVE'))} · ${probabilityLabel(verification.syntheticProbability)}`
+  }
+  if (status === 'UNAVAILABLE') return '交叉复核不可用'
+  return '当前类型无需追加'
+}
+
 function analysisStagesFor(observation: AgentObservation) {
   const media = mediaTypeContextFor(observation)
   const selected = selectedCapabilityFor(observation)
+  const crossDomain = crossDomainVerificationFor(observation)
+  const crossDomainStatus = String(crossDomain.status || 'NOT_REQUIRED')
   const secondary = secondaryVerificationFor(observation)
   const secondaryStatus = String(secondary.status || 'SKIPPED')
   const distance = typeof secondary.reconstructionDistance === 'number'
@@ -328,7 +345,14 @@ function analysisStagesFor(observation: AgentObservation) {
       state: 'complete',
     },
     {
-      index: '03', label: '独立扩散复核',
+      index: '03', label: '跨域模型复核', value: crossDomainLabel(observation),
+      detail: crossDomainStatus === 'SUCCEEDED'
+        ? '通用模型独立读取原图，用于核对动漫专用模型方向'
+        : String(crossDomain.reason || '仅动漫与漫画路由需要追加通用模型交叉复核'),
+      state: crossDomainStatus === 'SUCCEEDED' ? 'complete' : 'neutral',
+    },
+    {
+      index: '04', label: '独立扩散复核',
       value: secondaryStatus === 'SUCCEEDED' ? `重建距离 ${distance}` : secondaryStatus === 'SKIPPED' ? '本次无需追加' : '当前不可用',
       detail: secondaryStatus === 'SUCCEEDED'
         ? (secondary.calibrated ? '已使用校准阈值解释' : '未校准阈值，仅作为辅助信号')
@@ -336,7 +360,7 @@ function analysisStagesFor(observation: AgentObservation) {
       state: secondaryStatus === 'SUCCEEDED' ? 'complete' : 'neutral',
     },
     {
-      index: '04', label: '融合并解释', value: verdictLabel(String(fusionFor(observation).verdict || 'INCONCLUSIVE')),
+      index: '05', label: '融合并解释', value: verdictLabel(String(fusionFor(observation).verdict || 'INCONCLUSIVE')),
       detail: `融合置信度 ${confidenceLabel(fusionFor(observation).confidence)}，最终结果由你确认`, state: 'complete',
     },
   ]
@@ -367,6 +391,9 @@ function mediaTypeLabel(detection: Record<string, unknown>) {
   if (detection.mediaTypeLabel) return String(detection.mediaTypeLabel)
   return ({
     PHOTOGRAPH: '摄影图像',
+    ANIME_MANGA: '动漫或漫画',
+    DIGITAL_ILLUSTRATION: '数字插画或绘画',
+    VECTOR_CARTOON: '矢量卡通或扁平插画',
     ILLUSTRATION_CARTOON: '插画或卡通',
     THREE_D_RENDER: '3D 渲染或游戏画面',
     DOCUMENT_SCREENSHOT: '文档、网页或界面截图',
@@ -426,6 +453,7 @@ function selectAdjacentAsset(offset: number) {
 function isModelExecutionStep(type: string) {
   return [
     'MODEL_ROUTING_STARTED', 'PRIMARY_MODEL_STARTED', 'PRIMARY_MODEL_COMPLETED',
+    'CROSS_DOMAIN_MODEL_STARTED', 'CROSS_DOMAIN_MODEL_COMPLETED', 'CROSS_DOMAIN_MODEL_UNAVAILABLE',
     'SECONDARY_CHECK_DECIDED', 'SECONDARY_MODEL_STARTED', 'SECONDARY_MODEL_COMPLETED',
     'SECONDARY_MODEL_UNAVAILABLE', 'EVIDENCE_FUSION_STARTED', 'EVIDENCE_FUSED',
     'RESULT_EXPLANATION_STARTED', 'RESULT_EXPLAINED',
@@ -580,6 +608,11 @@ function stepSummary(step: AgentStep) {
   if (step.stepType === 'PRIMARY_MODEL_COMPLETED') {
     return `${String(output.capabilityName || '主检测模型')}完成：${verdictLabel(String(output.classification || 'INCONCLUSIVE'))}，AI 生成概率 ${probabilityLabel(output.syntheticProbability)}`
   }
+  if (step.stepType === 'CROSS_DOMAIN_MODEL_STARTED') return String(output.message || '通用模型正在执行跨域交叉复核')
+  if (step.stepType === 'CROSS_DOMAIN_MODEL_COMPLETED') {
+    return `通用模型交叉复核完成：${verdictLabel(String(output.classification || 'INCONCLUSIVE'))}，AI 生成概率 ${probabilityLabel(output.syntheticProbability)}`
+  }
+  if (step.stepType === 'CROSS_DOMAIN_MODEL_UNAVAILABLE') return String(output.message || '跨域交叉复核不可用，保留领域模型结果')
   if (step.stepType === 'SECONDARY_CHECK_DECIDED') return `${String(output.action) === 'RUN' ? '追加复核' : '跳过复核'}：${String(output.reason || output.message || '')}`
   if (step.stepType === 'SECONDARY_MODEL_STARTED') return String(output.message || '正在执行扩散重建复核')
   if (step.stepType === 'SECONDARY_MODEL_COMPLETED') {
@@ -874,6 +907,7 @@ onBeforeUnmount(() => {
                 <dl>
                   <div><dt>媒体类型</dt><dd>{{ activeMediaTypeObservation ? mediaTypeLabel(activeMediaTypeObservation.payload) : mediaTypeLabel(mediaTypeContextFor(activeAigcObservation)) }}</dd></div>
                   <div><dt>模型置信度</dt><dd>{{ confidenceLabel(fusionFor(activeAigcObservation).confidence) }}</dd></div>
+                  <div><dt>跨域交叉复核</dt><dd>{{ crossDomainLabel(activeAigcObservation) }}</dd></div>
                   <div><dt>C2PA 溯源</dt><dd>{{ activeProvenanceObservation ? provenanceStatusLabel(activeProvenanceObservation.payload.status) : '未执行' }}</dd></div>
                 </dl>
               </aside>
@@ -1002,6 +1036,13 @@ onBeforeUnmount(() => {
                 </p>
                 <p v-else>本次复核不可用，主检测结果仍会保留并交由你核验。</p>
               </div>
+              <div v-if="crossDomainVerificationFor(item).status && crossDomainVerificationFor(item).status !== 'NOT_REQUIRED'" class="fusion-reasons">
+                <strong>通用模型交叉复核</strong>
+                <p v-if="crossDomainVerificationFor(item).status === 'SUCCEEDED'">
+                  {{ crossDomainLabel(item) }}。该模型独立读取原图，用于核对动漫专用模型方向；两者冲突时系统不会强行给出结论。
+                </p>
+                <p v-else>{{ crossDomainVerificationFor(item).reason || '本次交叉复核不可用，领域模型结果已降低置信度。' }}</p>
+              </div>
               <div v-if="textItems(fusionFor(item).reasons).length" class="fusion-reasons">
                 <strong>系统为什么形成这个融合结果</strong>
                 <ul><li v-for="reason in textItems(fusionFor(item).reasons)" :key="reason">{{ reason }}</li></ul>
@@ -1025,7 +1066,7 @@ onBeforeUnmount(() => {
               </div>
               <p class="attention-notice">
                 {{ isLocalizationResult(item)
-                  ? '高亮区域来自插画/卡通专用模型的像素级响应，只表示疑似生成区域，仍需人工结合原图判断。'
+                  ? '高亮区域来自动漫/漫画专用模型的像素级响应，只表示疑似生成区域，仍需人工结合原图判断。'
                   : '颜色越暖表示该区域对当前分类的语义贡献越高；它不是精确的 AI 生成位置或篡改位置。' }}
               </p>
               <div class="aide-explanation">

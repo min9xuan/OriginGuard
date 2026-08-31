@@ -182,6 +182,12 @@ def health(
         "clipModelLoaded": clip_detector.loaded,
         "illustrationDetectorConfigured": anime_detector.configured,
         "illustrationDetectorLoaded": anime_detector.loaded,
+        "illustrationDetectorDomain": ["ANIME_MANGA"],
+        "illustrationDetectorCheckpointIntegrityVerified": anime_detector.checkpoint_integrity_verified,
+        "illustrationDetectorDecisionBand": {
+            "authenticMax": anime_detector.authentic_threshold,
+            "syntheticMin": anime_detector.synthetic_threshold,
+        },
         "diffusionVerifierConfigured": diffusion_verifier.configured,
         "diffusionVerifierLoaded": diffusion_verifier.loaded,
     }
@@ -222,12 +228,16 @@ def list_models(
                 "device": clip_detector.device_name,
             },
             {
-                "code": "ILLUSTRATION_AIGC_DETECTOR",
-                "name": "Illustration and cartoon generative-content detector",
+                "code": "ANIME_AIGC_DETECTOR",
+                "name": "AniXplore anime generation and manipulation detector",
                 "type": "AIGC_IMAGE_DETECTION",
+                "mediaTypes": ["ANIME_MANGA"],
                 "configured": anime_detector.configured,
                 "loaded": anime_detector.loaded,
                 "device": anime_detector.device_name,
+                "checkpointIntegrityVerified": anime_detector.checkpoint_integrity_verified,
+                "authenticThreshold": anime_detector.authentic_threshold,
+                "syntheticThreshold": anime_detector.synthetic_threshold,
             },
             {
                 "code": "DIFFUSION_RECONSTRUCTION_VERIFIER",

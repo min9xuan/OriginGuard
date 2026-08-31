@@ -24,7 +24,7 @@ public class ForensicModelRegistry {
 
     public ModelRoute route(String contentType, String mediaType, String purpose) {
         String mediaKind = contentType != null && contentType.startsWith("video/") ? "VIDEO" : "IMAGE";
-        String normalizedType = mediaType == null || mediaType.isBlank() ? "UNKNOWN" : mediaType;
+        String normalizedType = normalizeMediaType(mediaType);
         List<ForensicModelCapability> available = adapters.values().stream()
                 .map(ForensicModelAdapter::capability)
                 .filter(capability -> purpose.equals(capability.purpose()))
@@ -69,18 +69,35 @@ public class ForensicModelRegistry {
         return List.copyOf(result);
     }
 
+    private String normalizeMediaType(String mediaType) {
+        if (mediaType == null || mediaType.isBlank()) return "UNKNOWN";
+        // Results persisted before media taxonomy v2 cannot safely be assumed to be anime.
+        return "ILLUSTRATION_CARTOON".equals(mediaType) ? "DIGITAL_ILLUSTRATION" : mediaType;
+    }
+
     private List<ForensicModelCapability> plannedCapabilities() {
         return List.of(
                 new ForensicModelCapability(
-                        "illustration_aigc_detection",
-                        "插画与卡通生成内容鉴别",
+                        "anime_aigc_detection",
+                        "动漫与漫画生成内容鉴别",
                         "planned",
                         "AIGC_DETECTION",
                         Set.of("IMAGE"),
-                        Set.of("ILLUSTRATION_CARTOON"),
+                        Set.of("ANIME_MANGA"),
                         Set.of("PROBABILITY", "VERDICT", "ATTENTION_MAP"),
                         100,
-                        "面向插画、动漫和卡通内容的专用鉴别能力。",
+                        "面向动漫和漫画内容的专用鉴别能力。",
+                        List.of("尚未接入可执行模型")),
+                new ForensicModelCapability(
+                        "cross_domain_illustration_aigc_detection",
+                        "跨域数字插画生成内容鉴别",
+                        "planned",
+                        "AIGC_DETECTION",
+                        Set.of("IMAGE"),
+                        Set.of("DIGITAL_ILLUSTRATION", "VECTOR_CARTOON"),
+                        Set.of("PROBABILITY", "VERDICT", "ATTENTION_MAP"),
+                        90,
+                        "面向数字绘画、欧美卡通与矢量插画的跨域鉴别能力。",
                         List.of("尚未接入可执行模型")),
                 new ForensicModelCapability(
                         "diffusion_reconstruction_verification",
@@ -130,7 +147,7 @@ public class ForensicModelRegistry {
 
         public Map<String, Object> toMap() {
             Map<String, Object> result = new LinkedHashMap<>();
-            result.put("routingVersion", "1.0.0");
+            result.put("routingVersion", "2.0.0");
             result.put("mediaKind", mediaKind);
             result.put("mediaType", mediaType);
             result.put("selectedCapability", selected.toMap(true));

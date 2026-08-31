@@ -18,7 +18,7 @@ import org.springframework.stereotype.Component;
 @Component
 @ConditionalOnProperty(name = "originguard.agent.illustration-detector.enabled", havingValue = "true")
 public class IllustrationAigcModelAdapter implements ForensicModelAdapter {
-    public static final String CAPABILITY_CODE = "illustration_aigc_detection";
+    public static final String CAPABILITY_CODE = "anime_aigc_detection";
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final HttpClient client;
@@ -37,15 +37,15 @@ public class IllustrationAigcModelAdapter implements ForensicModelAdapter {
     public ForensicModelCapability capability() {
         return new ForensicModelCapability(
                 CAPABILITY_CODE,
-                "插画与卡通生成内容鉴别",
-                "1.0.0",
+                "动漫与漫画生成内容鉴别",
+                "2.0.0",
                 "AIGC_DETECTION",
                 Set.of("IMAGE"),
-                Set.of("ILLUSTRATION_CARTOON"),
+                Set.of("ANIME_MANGA"),
                 Set.of("PROBABILITY", "VERDICT", "LOCALIZATION_MASK"),
                 100,
-                "面向动漫、插画和卡通内容的生成痕迹检测与区域定位能力。",
-                List.of("模型分数和阈值需要使用业务域验证集校准"));
+                "面向动漫和漫画内容的生成痕迹检测与区域定位能力。",
+                List.of("不能外推到数字绘画或矢量卡通", "模型分数和阈值需要使用业务域验证集校准"));
     }
 
     @Override

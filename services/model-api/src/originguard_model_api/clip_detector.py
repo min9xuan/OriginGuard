@@ -15,14 +15,16 @@ from pydantic import BaseModel
 CLIP_PROVIDER = "OPENAI_CLIP"
 CLIP_MODEL = "ViT-B/32"
 CLIP_VERSION = "openai-2021"
-CLIP_PROMPT_VERSION = "3.0.0"
+CLIP_PROMPT_VERSION = "4.0.0"
 CLIP_MAX_BYTES = 25 * 1024 * 1024
-CLIP_MEDIA_TYPE_THRESHOLD = 0.45
-CLIP_MEDIA_TYPE_MARGIN = 0.08
+CLIP_MEDIA_TYPE_THRESHOLD = float(os.getenv("CLIP_MEDIA_TYPE_THRESHOLD", "0.35"))
+CLIP_MEDIA_TYPE_MARGIN = float(os.getenv("CLIP_MEDIA_TYPE_MARGIN", "0.04"))
 
 MEDIA_TYPE_LABELS = {
     "PHOTOGRAPH": "摄影图像",
-    "ILLUSTRATION_CARTOON": "插画或卡通",
+    "ANIME_MANGA": "动漫或漫画",
+    "DIGITAL_ILLUSTRATION": "数字插画或绘画",
+    "VECTOR_CARTOON": "矢量卡通或扁平插画",
     "THREE_D_RENDER": "3D 渲染或游戏画面",
     "DOCUMENT_SCREENSHOT": "文档、网页或界面截图",
     "DIAGRAM_GRAPHIC": "图表、海报或平面设计",
@@ -36,11 +38,23 @@ MEDIA_TYPE_PROMPTS = {
         "a natural photographic image",
         "documentary photography from the real world",
     ),
-    "ILLUSTRATION_CARTOON": (
-        "a cartoon character, mascot, or illustrated portrait",
-        "a two-dimensional digital illustration or vector cartoon",
-        "an anime, comic, or hand-drawn character picture",
-        "colorful stylized artwork depicting an illustrated subject",
+    "ANIME_MANGA": (
+        "a Japanese anime character illustration with cel shading",
+        "a manga or anime drawing with stylized line art",
+        "a two-dimensional anime scene or light novel character artwork",
+        "an anime-style illustration with large expressive eyes",
+    ),
+    "DIGITAL_ILLUSTRATION": (
+        "a digitally painted illustration or concept artwork",
+        "a painterly fantasy illustration made by a digital artist",
+        "a stylized editorial illustration with textured brush strokes",
+        "a detailed character or environment concept painting",
+    ),
+    "VECTOR_CARTOON": (
+        "a flat vector cartoon made from clean geometric shapes",
+        "a simple mascot, sticker, icon, or clip-art illustration",
+        "a western cartoon drawing with bold outlines and flat colors",
+        "a minimal vector illustration with smooth solid color regions",
     ),
     "THREE_D_RENDER": (
         "a three-dimensional computer graphics render",
@@ -147,6 +161,7 @@ class LocalClipDetector:
             "CLIP 只识别内容类型，不判断图像是否由 AI 生成",
             "结果只用于 Agent 规划、模型路由和适用性解释",
             "提示词选择、画面风格和训练数据偏差都可能影响类型识别",
+            "动漫、数字绘画与矢量卡通的边界可能重叠，低分或低间隔结果会标记为类型不明确",
         ]
         return ClipDetection(
             provider=CLIP_PROVIDER,

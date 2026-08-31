@@ -17,9 +17,9 @@ from pydantic import BaseModel
 from torch.nn import functional
 from torchvision import transforms
 
-ANIME_PROVIDER = "ILLUSTRATION_AIGC_DETECTOR"
-ANIME_MODEL = "Illustration and cartoon generative-content detector"
-ANIME_VERSION = "anixplore-official"
+ANIME_PROVIDER = "ANIME_AIGC_DETECTOR"
+ANIME_MODEL = "AniXplore anime generation and manipulation detector"
+ANIME_VERSION = "anixplore-anime-domain-v1"
 ANIME_INPUT_SIZE = 512
 ANIME_MAX_BYTES = 25 * 1024 * 1024
 
@@ -29,6 +29,7 @@ class AnimeDetection(BaseModel):
     model: str
     modelVersion: str
     checkpointSha256: str
+    checkpointIntegrityVerified: bool
     device: str
     syntheticProbability: float
     authenticProbability: float
@@ -53,6 +54,15 @@ class AnimeDetector(Protocol):
     @property
     def device_name(self) -> str: ...
 
+    @property
+    def synthetic_threshold(self) -> float: ...
+
+    @property
+    def authentic_threshold(self) -> float: ...
+
+    @property
+    def checkpoint_integrity_verified(self) -> bool: ...
+
     def detect(self, content: bytes) -> AnimeDetection: ...
 
 
@@ -64,6 +74,11 @@ class LocalAnimeDetector:
             os.getenv("ANIXPLORE_CHECKPOINT_PATH", str(runtime_root / "models" / "anixplore" / "checkpoint.pth")),
             repository_root,
         )
+        checksum_path = self._checkpoint_path.with_suffix(self._checkpoint_path.suffix + ".sha256")
+        configured_checksum = os.getenv("ANIXPLORE_CHECKPOINT_SHA256", "").strip().lower()
+        if not configured_checksum and checksum_path.is_file():
+            configured_checksum = checksum_path.read_text(encoding="utf-8").strip().split()[0].lower()
+        self._expected_checkpoint_sha256 = configured_checksum
         self._source_path = self._resolve_path(
             os.getenv(
                 "ANIXPLORE_SOURCE_PATH",
@@ -71,7 +86,12 @@ class LocalAnimeDetector:
             ),
             repository_root,
         )
-        self._threshold = float(os.getenv("ANIXPLORE_SYNTHETIC_THRESHOLD", "0.5"))
+        self._synthetic_threshold = float(os.getenv("ANIXPLORE_SYNTHETIC_THRESHOLD", "0.65"))
+        self._authentic_threshold = float(os.getenv("ANIXPLORE_AUTHENTIC_THRESHOLD", "0.35"))
+        if not 0.0 <= self._authentic_threshold < self._synthetic_threshold <= 1.0:
+            raise ValueError(
+                "AniXplore thresholds must satisfy 0 <= authentic < synthetic <= 1"
+            )
         self._requested_device = os.getenv("ANIXPLORE_DEVICE", "auto").lower()
         self._device = torch.device("cpu")
         self._model: Any | None = None
@@ -91,6 +111,18 @@ class LocalAnimeDetector:
     @property
     def device_name(self) -> str:
         return str(self._device)
+
+    @property
+    def synthetic_threshold(self) -> float:
+        return self._synthetic_threshold
+
+    @property
+    def authentic_threshold(self) -> float:
+        return self._authentic_threshold
+
+    @property
+    def checkpoint_integrity_verified(self) -> bool:
+        return bool(self._expected_checkpoint_sha256)
 
     def detect(self, content: bytes) -> AnimeDetection:
         if not content:
@@ -138,17 +170,18 @@ class LocalAnimeDetector:
             device=self.device_name,
             syntheticProbability=probability,
             authenticProbability=1.0 - probability,
-            classification="LIKELY_SYNTHETIC" if probability >= self._threshold else "LIKELY_AUTHENTIC",
-            syntheticThreshold=self._threshold,
-            authenticThreshold=self._threshold,
+            checkpointIntegrityVerified=bool(self._expected_checkpoint_sha256),
+            classification=self._classify(probability),
+            syntheticThreshold=self._synthetic_threshold,
+            authenticThreshold=self._authentic_threshold,
             width=width,
             height=height,
             processingMilliseconds=elapsed,
             localizationMethod="PIXEL_LEVEL_GENERATION_MASK",
             localizationOverlayPngBase64=base64.b64encode(overlay).decode("ascii"),
             limitations=[
-                "该模型面向动漫、插画与卡通内容，不能直接外推到自然照片。",
-                "当前连续分数由像素级生成区域响应汇总，阈值仍需使用业务验证集校准。",
+                "该模型只面向动漫与漫画内容，不能直接外推到数字绘画、矢量卡通或自然照片。",
+                "0.35 至 0.65 为保守不确定区间；阈值仍需使用 OriginGuard 业务验证集校准。",
             ],
         )
 
@@ -175,8 +208,22 @@ class LocalAnimeDetector:
             checkpoint = torch.load(self._checkpoint_path, map_location=self._device, weights_only=False)
             state_dict = checkpoint.get("model", checkpoint) if isinstance(checkpoint, dict) else checkpoint
             model.load_state_dict(state_dict, strict=True)
-            self._model = model.to(self._device).eval()
             self._checkpoint_sha256 = hashlib.sha256(self._checkpoint_path.read_bytes()).hexdigest()
+            if (
+                self._expected_checkpoint_sha256
+                and self._checkpoint_sha256 != self._expected_checkpoint_sha256
+            ):
+                raise RuntimeError(
+                    "AniXplore checkpoint SHA-256 does not match the installed checksum sidecar"
+                )
+            self._model = model.to(self._device).eval()
+
+    def _classify(self, probability: float) -> str:
+        if probability >= self._synthetic_threshold:
+            return "LIKELY_SYNTHETIC"
+        if probability <= self._authentic_threshold:
+            return "LIKELY_AUTHENTIC"
+        return "INCONCLUSIVE"
 
     def _resolve_device(self) -> torch.device:
         if self._requested_device == "auto":

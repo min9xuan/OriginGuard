@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class AigcEvidenceFusion {
-    public static final String POLICY_VERSION = "3.0.0";
+    public static final String POLICY_VERSION = "4.0.0";
 
     public Map<String, Object> fuse(
             Map<String, Object> primary,
@@ -22,6 +22,15 @@ public class AigcEvidenceFusion {
             Map<String, Object> mediaTypeContext,
             Map<String, Object> quality,
             Map<String, Object> secondaryVerification) {
+        return fuse(primary, mediaTypeContext, quality, secondaryVerification, Map.of());
+    }
+
+    public Map<String, Object> fuse(
+            Map<String, Object> primary,
+            Map<String, Object> mediaTypeContext,
+            Map<String, Object> quality,
+            Map<String, Object> secondaryVerification,
+            Map<String, Object> crossDomainVerification) {
         String qualityStatus = text(quality, "status", "PASS");
         String primaryVerdict = text(primary, "classification", "INCONCLUSIVE");
         String mediaTypeStatus = text(mediaTypeContext, "status", "UNAVAILABLE");
@@ -54,20 +63,41 @@ public class AigcEvidenceFusion {
             agreement = "AVAILABLE".equals(mediaTypeStatus)
                     ? "PRELIMINARY_WITH_TYPE_CONTEXT" : "PRELIMINARY_WITHOUT_TYPE_CONTEXT";
             decisionReady = true;
-            reasons.add("生成内容鉴别模型已依据 0.5 实验决策阈值形成“" + primaryVerdict + "”的初步方向。");
+            reasons.add("生成内容鉴别模型已依据当前模型的保守决策区间形成“" + primaryVerdict + "”的初步方向。");
             if ("AVAILABLE".equals(mediaTypeStatus)) {
                 reasons.add("CLIP 将媒体识别为“" + mediaTypeLabel + "”，该类型仅用于路由后续专用模型和解释适用边界。");
             } else {
                 limitations.add("本次未取得 CLIP 媒体类型，无法执行面向内容域的模型路由。");
             }
-            boolean specialized = "ILLUSTRATION_AIGC_DETECTOR".equals(primary.get("provider"));
+            boolean specialized = "ANIME_AIGC_DETECTOR".equals(primary.get("provider"));
             if (!"PHOTOGRAPH".equals(mediaType) && !specialized) {
                 limitations.add("尚未接入“" + mediaTypeLabel + "”专用 AIGC 检测模型，当前初步判断主要来自通用生成内容鉴别模型。");
             }
             if (specialized) {
-                reasons.add("已使用匹配“" + mediaTypeLabel + "”内容域的专用模型执行检测与区域定位。");
+                reasons.add("已使用匹配“" + mediaTypeLabel + "”内容域的 AniXplore 模型执行检测与区域定位。");
             }
             limitations.add("这是 Agent 的模型初步判断，仍需由你结合证据完成最终人工核验。");
+        }
+        String crossDomainStatus = text(crossDomainVerification, "status", "NOT_RUN");
+        String crossDomainVerdict = text(crossDomainVerification, "classification", "INCONCLUSIVE");
+        if ("SUCCEEDED".equals(crossDomainStatus)) {
+            if (isLikely(primaryVerdict) && isLikely(crossDomainVerdict)
+                    && !primaryVerdict.equals(crossDomainVerdict)) {
+                verdict = "CONFLICTING_EVIDENCE";
+                confidence = "LOW";
+                agreement = "DOMAIN_AND_GENERAL_CONFLICT";
+                decisionReady = false;
+                reasons.add("动漫专用模型与通用生成内容鉴别模型给出了相反方向，本次不能形成方向性结论。");
+            } else if (isLikely(primaryVerdict) && primaryVerdict.equals(crossDomainVerdict)) {
+                agreement = "DOMAIN_AND_GENERAL_AGREE";
+                confidence = raiseConfidence(confidence);
+                reasons.add("动漫专用模型与跨域通用模型方向一致，形成了独立交叉复核信号。");
+            } else {
+                limitations.add("通用模型交叉复核未形成明确方向，没有改变领域模型结论。");
+            }
+        } else if ("ANIME_MANGA".equals(mediaType)) {
+            limitations.add("动漫内容未取得通用模型交叉复核结果，领域模型结论需降低置信度解释。");
+            confidence = lowerConfidence(confidence);
         }
         String secondaryStatus = text(secondaryVerification, "status", "NOT_RUN");
         String secondaryVerdict = text(secondaryVerification, "classification", "INCONCLUSIVE");
@@ -94,8 +124,9 @@ public class AigcEvidenceFusion {
         result.put("assessmentLevel", "AGENT_PRELIMINARY");
         result.put("humanReviewRequired", true);
         result.put("recommendedDomainDetector", recommendedDomainDetector(mediaType));
-        result.put("specializedDetectorStatus", "ILLUSTRATION_AIGC_DETECTOR".equals(primary.get("provider"))
-                ? "USED" : "NOT_USED");
+        result.put("specializedDetectorStatus", specializedDetectorStatus(mediaType, primary));
+        result.put("crossDomainVerificationStatus", crossDomainStatus);
+        result.put("crossDomainVerificationVerdict", crossDomainVerdict);
         result.put("secondaryVerificationStatus", secondaryStatus);
         result.put("reasons", List.copyOf(reasons));
         result.put("limitations", List.copyOf(limitations));
@@ -119,11 +150,37 @@ public class AigcEvidenceFusion {
 
     private String recommendedDomainDetector(String mediaType) {
         return switch (mediaType) {
-            case "ILLUSTRATION_CARTOON" -> "CARTOON_AIGC_DETECTOR";
+            case "ANIME_MANGA" -> "ANIME_AIGC_DETECTOR";
+            case "DIGITAL_ILLUSTRATION", "VECTOR_CARTOON" -> "CROSS_DOMAIN_ILLUSTRATION_AIGC_DETECTOR";
             case "THREE_D_RENDER" -> "CGI_AIGC_DETECTOR";
             case "DOCUMENT_SCREENSHOT" -> "SCREENSHOT_FORENSICS_DETECTOR";
             case "DIAGRAM_GRAPHIC" -> "GRAPHIC_AIGC_DETECTOR";
             default -> "GENERAL_AIGC_DETECTOR";
+        };
+    }
+
+    private String specializedDetectorStatus(String mediaType, Map<String, Object> primary) {
+        if ("ANIME_AIGC_DETECTOR".equals(primary.get("provider"))) return "USED";
+        return switch (mediaType) {
+            case "ANIME_MANGA", "DIGITAL_ILLUSTRATION", "VECTOR_CARTOON", "THREE_D_RENDER",
+                    "DOCUMENT_SCREENSHOT", "DIAGRAM_GRAPHIC" -> "NOT_CONFIGURED";
+            default -> "NOT_REQUIRED";
+        };
+    }
+
+    private String raiseConfidence(String value) {
+        return switch (value) {
+            case "LOW" -> "MEDIUM";
+            case "MEDIUM" -> "HIGH";
+            default -> value;
+        };
+    }
+
+    private String lowerConfidence(String value) {
+        return switch (value) {
+            case "HIGH" -> "MEDIUM";
+            case "MEDIUM" -> "LOW";
+            default -> value;
         };
     }
 
