@@ -6,7 +6,36 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+function Import-DotEnv([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return }
+    $values = [ordered]@{}
+    foreach ($rawLine in Get-Content -LiteralPath $Path -Encoding UTF8) {
+        $line = $rawLine.Trim()
+        if (-not $line -or $line.StartsWith('#')) { continue }
+        if ($line.StartsWith('export ')) { $line = $line.Substring(7).TrimStart() }
+        $separator = $line.IndexOf('=')
+        if ($separator -lt 1) { throw "Invalid .env entry: $rawLine" }
+        $name = $line.Substring(0, $separator).Trim()
+        if ($name -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') { throw "Invalid .env variable name: $name" }
+        $value = $line.Substring($separator + 1).Trim()
+        if ($value.Length -ge 2 -and (
+            ($value.StartsWith('"') -and $value.EndsWith('"')) -or
+            ($value.StartsWith("'") -and $value.EndsWith("'")))) {
+            $value = $value.Substring(1, $value.Length - 2)
+        }
+        $values[$name] = $value
+    }
+    $loaded = 0
+    foreach ($entry in $values.GetEnumerator()) {
+        if ($null -ne [Environment]::GetEnvironmentVariable($entry.Key, 'Process')) { continue }
+        [Environment]::SetEnvironmentVariable($entry.Key, [string]$entry.Value, 'Process')
+        $loaded++
+    }
+    Write-Host "Loaded $loaded local setting(s) from .env; existing shell variables kept precedence."
+}
+
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+Import-DotEnv (Join-Path $repositoryRoot '.env')
 $runtimeRoot = Join-Path $repositoryRoot '.runtime'
 $logRoot = Join-Path $runtimeRoot 'logs\local-stack'
 $pidRoot = Join-Path $runtimeRoot 'pids'

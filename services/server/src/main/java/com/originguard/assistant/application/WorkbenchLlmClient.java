@@ -42,6 +42,7 @@ public class WorkbenchLlmClient {
                 你是 OriginGuard 工作台的意图路由器。你只负责判断请求类型，不回答问题。
                 DIRECT_ANSWER：常识、原理、产品用法、论文讨论等不需要对具体媒体执行工具的问题。
                 MEDIA_ANALYSIS：用户要求判断某个已上传或上下文中的具体图片/视频是否为 AI 生成、是否来自某模型、是否被篡改。
+                WEB_SECURITY_INVESTIGATION：用户提供了具体 HTTP/HTTPS URL，并要求判断网站、域名、链接、证书、钓鱼、诈骗或恶意风险。
                 NEEDS_ATTACHMENT：用户要求分析具体媒体，但会话中没有可用附件。
                 needsWebSearch 仅在问题强调最新、实时、联网、近期论文或当前信息时为 true。
                 needsKnowledgeRetrieval 仅在回答确实需要论文、产品说明、检测方法、专业事实或知识依据时为 true。
@@ -54,7 +55,8 @@ public class WorkbenchLlmClient {
                 "type", "object", "additionalProperties", false,
                 "required", List.of("intent", "needsWebSearch", "needsKnowledgeRetrieval", "reason"),
                 "properties", Map.of(
-                        "intent", Map.of("type", "string", "enum", List.of("DIRECT_ANSWER", "MEDIA_ANALYSIS", "NEEDS_ATTACHMENT")),
+                        "intent", Map.of("type", "string", "enum", List.of(
+                                "DIRECT_ANSWER", "MEDIA_ANALYSIS", "WEB_SECURITY_INVESTIGATION", "NEEDS_ATTACHMENT")),
                         "needsWebSearch", Map.of("type", "boolean"),
                         "needsKnowledgeRetrieval", Map.of("type", "boolean"),
                         "reason", Map.of("type", "string")));
@@ -168,14 +170,19 @@ public class WorkbenchLlmClient {
 
     private RouteDecision heuristicRoute(String input, boolean hasPriorAsset) {
         String normalized = input.toLowerCase();
+        boolean hasUrl = normalized.matches("(?s).*https?://[^\\s<>\\\"']+.*");
+        boolean webSecurityRequest = hasUrl && normalized.matches(
+                "(?s).*(安全|钓鱼|诈骗|恶意|风险|网站|网页|域名|链接|url|证书|仿冒|登录|跳转|重定向|病毒|木马).*" );
         boolean generalQuestion = normalized.contains("什么是") || normalized.contains("原理")
                 || normalized.contains("怎么做") || normalized.contains("如何工作") || normalized.contains("论文");
         boolean concreteMedia = normalized.matches(".*(这张|这幅|这段|这个图|这张图|这个视频|我上传|刚才|它).*(图|图片|图像|照片|视频|媒体|生成|sora|ai|aigc|真假|真实性|篡改).*" )
                 || normalized.matches(".*(图|图片|图像|照片|视频|媒体).*(是否|是不是|由.*生成|检测|分析|真假|真实性|篡改).*" );
-        Intent intent = concreteMedia && !generalQuestion
+        Intent intent = webSecurityRequest
+                ? Intent.WEB_SECURITY_INVESTIGATION
+                : concreteMedia && !generalQuestion
                 ? (hasPriorAsset ? Intent.MEDIA_ANALYSIS : Intent.NEEDS_ATTACHMENT)
                 : Intent.DIRECT_ANSWER;
-        boolean web = normalized.matches(".*(最新|实时|联网|网上搜索|近期|今年|现在有哪些|sora|midjourney|stable diffusion|flux|novelai).*" );
+        boolean web = webSecurityRequest || normalized.matches(".*(最新|实时|联网|网上搜索|近期|今年|现在有哪些|sora|midjourney|stable diffusion|flux|novelai).*" );
         boolean knowledge = !isSmallTalk(input) && (generalQuestion
                 || normalized.matches(".*(aigc|ai生成|人工智能|检测|模型|论文|算法|rag|知识库|取证|真实性|篡改|扩散模型|产品|怎么用|如何使用).*"));
         return new RouteDecision(intent, web, knowledge, "规则降级路由");
@@ -217,7 +224,7 @@ public class WorkbenchLlmClient {
         return firstLine >= 0 && lastFence > firstLine ? trimmed.substring(firstLine + 1, lastFence).trim() : trimmed;
     }
 
-    public enum Intent { DIRECT_ANSWER, MEDIA_ANALYSIS, NEEDS_ATTACHMENT }
+    public enum Intent { DIRECT_ANSWER, MEDIA_ANALYSIS, WEB_SECURITY_INVESTIGATION, NEEDS_ATTACHMENT }
     public record RouteDecision(
             Intent intent, boolean needsWebSearch, boolean needsKnowledgeRetrieval, String reason) {}
 }

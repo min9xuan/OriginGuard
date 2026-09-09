@@ -36,6 +36,7 @@ public class AssistantWorkbenchService {
     private final MediaAssetService mediaAssetService;
     private final InvestigationCaseService investigationCaseService;
     private final AgentTaskService agentTaskService;
+    private final WebSecurityInvestigationService webSecurityInvestigationService;
     private final ObjectProvider<AgentTaskDispatcher> taskDispatcher;
 
     public AssistantWorkbenchService(
@@ -46,6 +47,7 @@ public class AssistantWorkbenchService {
             MediaAssetService mediaAssetService,
             InvestigationCaseService investigationCaseService,
             AgentTaskService agentTaskService,
+            WebSecurityInvestigationService webSecurityInvestigationService,
             ObjectProvider<AgentTaskDispatcher> taskDispatcher) {
         this.repository = repository;
         this.actorProvider = actorProvider;
@@ -54,6 +56,7 @@ public class AssistantWorkbenchService {
         this.mediaAssetService = mediaAssetService;
         this.investigationCaseService = investigationCaseService;
         this.agentTaskService = agentTaskService;
+        this.webSecurityInvestigationService = webSecurityInvestigationService;
         this.taskDispatcher = taskDispatcher;
     }
 
@@ -126,9 +129,46 @@ public class AssistantWorkbenchService {
         if (route.intent() == WorkbenchLlmClient.Intent.MEDIA_ANALYSIS) {
             return runMediaAgent(actor, conversationId, content.trim(), contextAssetIds, history, route.needsWebSearch());
         }
+        if (route.intent() == WorkbenchLlmClient.Intent.WEB_SECURITY_INVESTIGATION) {
+            return runWebSecurityInvestigation(actor, conversationId, content.trim());
+        }
         return answerDirectly(
                 actor, conversationId, content.trim(), history,
                 route.needsWebSearch(), route.needsKnowledgeRetrieval());
+    }
+
+    private ConversationDetails runWebSecurityInvestigation(
+            CurrentActor actor, UUID conversationId, String question) {
+        try {
+            WebSecurityInvestigationService.Result result = webSecurityInvestigationService.investigate(question);
+            List<LiveWebSearchClient.WebSource> sources = result.intelligence().sources();
+            Map<String, Object> grounding = new LinkedHashMap<>();
+            grounding.put("routeIntent", "WEB_SECURITY_INVESTIGATION");
+            grounding.put("groundingModes", sources.isEmpty()
+                    ? List.of("NETWORK_OBSERVATION")
+                    : List.of("NETWORK_OBSERVATION", "LIVE_WEB_SEARCH"));
+            grounding.put("webSecurityInvestigation", result.report());
+            grounding.put("liveSearchProvider", result.intelligence().provider());
+            grounding.put("liveWebSources", sources.stream().map(item -> Map.of(
+                    "label", "W" + (sources.indexOf(item) + 1),
+                    "provider", item.provider(), "title", item.title(), "url", item.url(),
+                    "snippet", item.snippet(), "score", item.score(), "venue", item.venue(),
+                    "publicationYear", item.publicationYear() == null ? 0 : item.publicationYear(),
+                    "qualityTier", item.qualityTier(), "qualityReason", item.qualityReason())).toList());
+            grounding.put("retrievalInfluenceSummary",
+                    "公开网页结果仅作为威胁调查线索展示，未直接修改 URL、DNS 与 TLS 形成的确定性风险分。"
+                            + "任何恶意定性仍需调查员核实。");
+            grounding.put("retrievedContentIsEvidence", false);
+            repository.insertMessage(
+                    actor.tenantId(), conversationId, "ASSISTANT", "CHAT", result.answer(),
+                    null, null, Map.copyOf(grounding));
+        } catch (BusinessConflictException blocked) {
+            repository.insertMessage(
+                    actor.tenantId(), conversationId, "ASSISTANT", "ERROR",
+                    webSecurityRefusal(blocked.code()), null, null,
+                    Map.of("routeIntent", "WEB_SECURITY_INVESTIGATION", "securityPolicyCode", blocked.code()));
+        }
+        return getConversation(conversationId);
     }
 
     private ConversationDetails answerDirectly(
@@ -403,6 +443,18 @@ public class AssistantWorkbenchService {
 
     private String safeText(String message) {
         return message == null || message.isBlank() ? "未知执行错误" : abbreviate(message, 400);
+    }
+
+    private String webSecurityRefusal(String code) {
+        return switch (code) {
+            case "WEB_SECURITY_URL_REQUIRED" -> "请提供一个完整的 `http://` 或 `https://` URL，我才能启动 Web 安全调查。";
+            case "WEB_SECURITY_PRIVATE_TARGET_BLOCKED", "WEB_SECURITY_TARGET_BLOCKED" ->
+                    "该目标被网络安全策略阻止。OriginGuard 不访问内网、回环、链路本地、保留地址、"
+                            + "带凭据的 URL 或非标准 Web 端口，以避免 SSRF 和越权探测。";
+            case "WEB_SECURITY_DNS_UNRESOLVED", "WEB_SECURITY_DNS_INTERRUPTED" ->
+                    "目标域名当前无法完成受控 DNS 解析，因此没有继续进行网络探测。请核对 URL 后重试。";
+            default -> "该 URL 未通过受控 Web 安全调查策略，系统没有访问目标。";
+        };
     }
 
     public record ConversationDetails(

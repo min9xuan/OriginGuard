@@ -57,6 +57,15 @@ public class LiveWebSearchClient {
         return new SearchResponse("OPENALEX_ACADEMIC", searchOpenAlex(query, limit));
     }
 
+    /** General-web-only lookup for current security signals; never falls back to academic search. */
+    public SearchResponse searchGeneralWeb(String query, int limit) {
+        if ("disabled".equals(provider)) return new SearchResponse("DISABLED", List.of());
+        if (("auto".equals(provider) || "tavily".equals(provider)) && !tavilyApiKey.isBlank()) {
+            return new SearchResponse("TAVILY", searchTavily(query, limit));
+        }
+        return new SearchResponse("GENERAL_WEB_NOT_CONFIGURED", List.of());
+    }
+
     private List<WebSource> searchTavily(String query, int limit) {
         try {
             Map<String, Object> body = new LinkedHashMap<>();

@@ -43,4 +43,20 @@ class WorkbenchLlmClientTests {
 
         assertThat(route.intent()).isEqualTo(WorkbenchLlmClient.Intent.MEDIA_ANALYSIS);
     }
+
+    @Test
+    void explicitSuspiciousUrlStartsWebSecurityInvestigation() {
+        var route = client.route("请检查 https://secure-login.example.com/account 这个网站是不是钓鱼网站", List.of(), false);
+
+        assertThat(route.intent()).isEqualTo(WorkbenchLlmClient.Intent.WEB_SECURITY_INVESTIGATION);
+        assertThat(route.needsWebSearch()).isTrue();
+        assertThat(route.needsKnowledgeRetrieval()).isFalse();
+    }
+
+    @Test
+    void generalPhishingQuestionRemainsDirectAnswer() {
+        var route = client.route("什么是钓鱼网站？", List.of(), false);
+
+        assertThat(route.intent()).isEqualTo(WorkbenchLlmClient.Intent.DIRECT_ANSWER);
+    }
 }

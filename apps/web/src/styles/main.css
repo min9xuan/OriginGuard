@@ -1143,6 +1143,41 @@ button, input, textarea, select { font: inherit; }
 .assistant-task-link strong { font-size: 14px; }
 .assistant-task-link > span:last-child { font-size: 22px; }
 .assistant-task-link:hover { border-color: #687787; background: #e9edf0; }
+.web-security-report { margin-top: 17px; overflow: hidden; border: 1px solid #c5cdd4; border-radius: 10px; background: #f8f9fa; }
+.web-security-report > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 17px 18px; border-bottom: 1px solid #d8dde1; background: #eef1f3; }
+.web-security-report > header > div:first-child { display: grid; min-width: 0; gap: 4px; }
+.web-security-report > header small { color: #6b7885; font-size: 10px; font-weight: 760; letter-spacing: .12em; }
+.web-security-report > header strong { color: #263445; font-size: 17px; }
+.web-security-report > header span { overflow: hidden; color: #657281; font: 11px/1.45 Consolas, monospace; overflow-wrap: anywhere; }
+.web-security-score { display: grid; flex: 0 0 auto; grid-template-columns: auto auto; align-items: baseline; color: #405667; text-align: right; }
+.web-security-score strong { font-size: 30px !important; line-height: 1; }
+.web-security-score > span { margin-left: 3px; color: #75818c; font-size: 11px; }
+.web-security-score small { grid-column: 1 / -1; margin-top: 5px; letter-spacing: 0 !important; }
+.web-security-report[data-risk="MEDIUM"] .web-security-score { color: #8a642b; }
+.web-security-report[data-risk="HIGH"] .web-security-score { color: #914747; }
+.web-security-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-bottom: 1px solid #d8dde1; }
+.web-security-facts article { display: grid; min-width: 0; gap: 5px; padding: 13px 15px; }
+.web-security-facts article + article { border-left: 1px solid #dde2e6; }
+.web-security-facts article:nth-child(4) { border-left: 0; }
+.web-security-facts article:nth-child(n + 4) { border-top: 1px solid #dde2e6; }
+.web-security-facts span { color: #77828d; font-size: 10px; }
+.web-security-facts strong { overflow: hidden; color: #394858; font-size: 12px; font-weight: 680; overflow-wrap: anywhere; }
+.web-security-signals { padding: 14px 16px; }
+.web-security-signals > strong { display: block; margin-bottom: 8px; color: #334253; font-size: 12px; }
+.web-security-signals > p { margin: 0; color: #64717d; font-size: 12px; }
+.web-security-signals > div { display: grid; grid-template-columns: 54px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid #e0e4e7; }
+.web-security-signals > div > span { padding: 3px 5px; border-radius: 4px; color: #4f6b5d; background: #e9f1ed; font-size: 9px; font-weight: 760; text-align: center; }
+.web-security-signals > div > span[data-severity="MEDIUM"] { color: #805f2e; background: #f4eddf; }
+.web-security-signals > div > span[data-severity="HIGH"] { color: #8a4646; background: #f5e8e8; }
+.web-security-signals > div p { margin: 0; color: #536171; font-size: 12px; line-height: 1.5; }
+.web-security-signals > div > strong { color: #657281; font-size: 11px; }
+.web-security-trace { border-top: 1px solid #d8dde1; }
+.web-security-trace summary { padding: 11px 16px; color: #536475; font-size: 11px; font-weight: 700; cursor: pointer; }
+.web-security-trace ol { margin: 0; padding: 0 16px 4px; list-style: none; }
+.web-security-trace ol li { display: grid; grid-template-columns: 120px 92px minmax(0, 1fr); gap: 10px; padding: 8px 0; border-top: 1px solid #e1e5e8; }
+.web-security-trace li span, .web-security-trace li strong { color: #536171; font-size: 10px; }
+.web-security-trace li p { margin: 0; color: #687582; font-size: 11px; line-height: 1.5; }
+.web-security-trace ul { margin: 4px 16px 14px; padding-left: 18px; color: #73808c; font-size: 11px; line-height: 1.6; }
 .assistant-grounding-modes { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 15px; }
 .assistant-grounding-modes span { padding: 4px 8px; border: 1px solid #d1d7dc; border-radius: 99px; color: #667382; background: #fafafa; font-size: 10px; }
 .assistant-sources { margin-top: 13px; border-top: 1px solid #e0e4e7; }
@@ -1198,6 +1233,10 @@ button, input, textarea, select { font: inherit; }
   .assistant-avatar { width: 33px; height: 33px; }
   .assistant-selected-files-grid { grid-template-columns: 1fr; }
   .assistant-selected-files-head small { display: none; }
+  .web-security-report > header { align-items: stretch; }
+  .web-security-facts { grid-template-columns: 1fr; }
+  .web-security-facts article + article, .web-security-facts article:nth-child(4) { border-top: 1px solid #dde2e6; border-left: 0; }
+  .web-security-trace ol li { grid-template-columns: 1fr; gap: 4px; }
   .joint-result-grid, .provenance-card, .evidence-visibility-grid { grid-template-columns: 1fr; }
   .joint-result-grid article + article { border-top: 1px solid #d4dae0; border-left: 0; }
   .evidence-visibility-grid article + article { border-top: 1px solid #d4dae0; border-left: 0; }

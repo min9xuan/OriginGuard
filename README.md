@@ -29,6 +29,8 @@ Context → Plan → Validate → Act → Observe → Replan / Stop → Synthesi
 - Observation 驱动的动态重规划，并为异常决策提供安全降级
 - 每次模型选择、工具调用、Observation、Checkpoint 和计划调整均持久化留痕
 - 执行抽屉实时展示当前阶段、模型回复摘要和可审计事件
+- Agent 行为评测：使用真实任务 Trace 按工具选择、规划重规划、目标覆盖、证据忠实度、鲁棒性和性能执行确定性评分
+- 受控 Web 安全调查：工作台识别可疑 URL，阻断内网和危险目标后记录 DNS、TLS、IOC、风险信号与公开威胁线索
 - Agent 只形成初步判断，不代替用户的最终核验
 
 ### 媒体取证能力
@@ -67,6 +69,23 @@ ForensicModelAdapter
 
 实现说明见 [M5.3 可插拔取证模型注册与动态路由](docs/product/m5.3-forensic-model-routing.md)。
 
+### Agent Evaluation
+
+- 管理端可建立可复用评测规则，声明必须/禁止的 Skill 与 Observation
+- 对已经结束的真实 Agent 任务读取 Trace、Observation 与 Checkpoint，不修改原任务
+- 检查工具调用预算、重规划次数、重复动态决策、总耗时和任务终态
+- 证据冲突被确定结论覆盖、取消人工核验或调用禁用能力会被标记为关键失败
+- 保存六个维度的得分、违规原因和原始计数，可用同一规则比较不同版本任务
+- 评分器采用确定性规则，不让被评测 Agent 或另一个 LLM 直接决定是否通过
+
+实现说明见 [M6.1 Agent 行为评测基线](docs/product/m6.1-agent-evaluation.md)。
+
+### Web Security Investigation
+
+工作台支持对明确的 HTTP/HTTPS URL 发起防御性初筛。系统不会直接下载或执行目标页面内容，而是在 SSRF 策略校验后完成公网 DNS、TLS 证书与主机名核验、URL 风险规则评分以及可选实时网页线索检索。公开搜索结果不会直接修改风险分，所有恶意定性仍需人工核验。
+
+实现和安全边界见 [M6.2 受控 Web 安全调查](docs/product/m6.2-web-security-investigation.md)。
+
 ### 统一检索与 RAG 增强
 
 - `RetrievalOrchestrator` 统一调度模型知识、会话上下文、已发布知识库和实时网络来源
@@ -93,7 +112,7 @@ ForensicModelAdapter
 - 对话可继续追问，并复用本轮上下文和最近一次上传的媒体
 - 用户可以删除不再需要的单个对话，避免会话与来源材料无限累积
 
-相关配置见 `.env.example` 中的 `ASSISTANT_LLM_PROVIDER`、`WEB_SEARCH_PROVIDER` 与可选的 `TAVILY_API_KEY`。
+相关配置见 `.env.example` 中的 `ASSISTANT_LLM_PROVIDER`、`WEB_SEARCH_PROVIDER` 与可选的 `TAVILY_API_KEY`。本地运行时复制为根目录 `.env`；`scripts/start-local-stack.ps1` 会自动加载它，且不会覆盖当前 PowerShell 已显式设置的环境变量。真实密钥只写入被 Git 忽略的 `.env`，不要写入 `.env.example`。
 
 ## 技术栈
 
@@ -295,6 +314,7 @@ mvn test
 
 ## 后续计划
 
+- 扩展 Agent Evaluation 场景集，加入工具超时、消息重复投递、提示注入与 Checkpoint 恢复测试
 - 使用动漫/漫画业务验证集校准 AniXplore 决策区间，并为数字绘画与矢量卡通接入跨域专用模型
 - 接入局部篡改定位并输出定位掩码
 - 增加检测记录归档与一键重新分析

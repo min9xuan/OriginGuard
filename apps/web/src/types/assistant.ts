@@ -39,3 +39,34 @@ export interface AssistantConversationDetails {
   conversation: AssistantConversation
   messages: AssistantMessage[]
 }
+
+export interface WebSecurityRiskSignal {
+  code: string
+  severity: 'LOW' | 'MEDIUM' | 'HIGH'
+  points: number
+  message: string
+}
+
+export interface WebSecurityTraceEvent {
+  stage: string
+  status: string
+  summary: string
+}
+
+export interface WebSecurityInvestigationReport {
+  targetUrl: string
+  host: string
+  scheme: string
+  port: number
+  resolvedAddresses: string[]
+  riskScore: number
+  riskLevel: 'LOW' | 'MEDIUM' | 'HIGH'
+  signals: WebSecurityRiskSignal[]
+  trace: WebSecurityTraceEvent[]
+  tls: Record<string, unknown>
+  threatIntelProvider: string
+  threatIntelSourceCount: number
+  retrievalAffectedScore: boolean
+  durationMilliseconds: number
+  limitations: string[]
+}

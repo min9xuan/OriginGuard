@@ -11,6 +11,7 @@ import type {
   AssistantConversationDetails,
   AssistantGroundingSource,
   AssistantMessage,
+  WebSecurityInvestigationReport,
 } from '../types/assistant'
 import type { MediaAsset } from '../types/business'
 import { formatBytes, formatDate } from '../utils/format'
@@ -252,6 +253,27 @@ function groundingModes(message: AssistantMessage): string[] {
     : []
 }
 
+function webSecurityReport(message: AssistantMessage): WebSecurityInvestigationReport | null {
+  const report = message.grounding.webSecurityInvestigation
+  return report && typeof report === 'object' ? report as WebSecurityInvestigationReport : null
+}
+
+function securityRiskLabel(level: string) {
+  return ({ LOW: '低风险', MEDIUM: '中风险', HIGH: '高风险' } as Record<string, string>)[level] ?? level
+}
+
+function securityStageLabel(stage: string) {
+  return ({
+    TARGET_POLICY: '目标策略', DNS_RESOLUTION: 'DNS 解析', TLS_INSPECTION: 'TLS 核验',
+    PUBLIC_THREAT_SEARCH: '公开威胁检索', RISK_SYNTHESIS: '风险融合',
+  } as Record<string, string>)[stage] ?? stage
+}
+
+function tlsValue(report: WebSecurityInvestigationReport | null, key: string) {
+  const value = report?.tls?.[key]
+  return value == null || value === '' ? '—' : String(value)
+}
+
 function attachmentNames(message: AssistantMessage): string[] {
   const names = message.grounding.attachmentNames
   if (Array.isArray(names)) return names.map(String)
@@ -264,6 +286,7 @@ function modeLabel(mode: string) {
     CONVERSATION_CONTEXT: '会话上下文',
     PUBLISHED_KNOWLEDGE_BASE: '已发布知识库',
     LIVE_WEB_SEARCH: '实时网络',
+    NETWORK_OBSERVATION: '网络观察',
   } as Record<string, string>)[mode] ?? mode
 }
 
@@ -309,7 +332,7 @@ async function scrollToBottom() {
       <header class="assistant-chat-head">
         <div>
           <span class="canvas-status"></span>
-          <div><strong>{{ current?.conversation.title ?? '分析助手' }}</strong><small>先理解问题，必要时才运行取证 Agent</small></div>
+          <div><strong>{{ current?.conversation.title ?? '分析助手' }}</strong><small>理解问题后选择问答、媒体取证或受控 Web 安全调查</small></div>
         </div>
         <RouterLink to="/analyze/history">查看检测记录</RouterLink>
       </header>
@@ -317,11 +340,12 @@ async function scrollToBottom() {
       <div ref="messageList" class="assistant-messages">
         <section v-if="!current?.messages.length" class="assistant-empty">
           <span class="assistant-mark">OG</span>
-          <h1>你想了解什么，或者要分析哪张图片？</h1>
-          <p>常识问题由大模型结合知识直接回答；涉及具体媒体真实性时，我会建立 Agent 任务并保留完整证据链。</p>
+          <h1>你想了解什么，或者要调查什么内容？</h1>
+          <p>常识问题直接回答；媒体真实性进入取证 Agent；具体可疑 URL 则执行受控的 DNS、TLS 与公开威胁线索调查。</p>
           <div class="assistant-suggestions">
             <button type="button" @click="applySuggestion('RAG 在 AIGC 图像检测中主要解决什么问题？')">解释一个常识问题</button>
             <button type="button" @click="applySuggestion('最近有哪些针对插画或卡通图像的 AIGC 检测研究？')">检索近期研究</button>
+            <button type="button" @click="applySuggestion('请检查 https://example.com/login 这个网站是否存在钓鱼或证书风险')">调查可疑 URL</button>
             <button type="button" @click="openPicker">上传图片并询问</button>
           </div>
         </section>
@@ -353,6 +377,45 @@ async function scrollToBottom() {
               <span><small>AGENT TASK</small><strong>查看运行过程与证据</strong></span>
               <span aria-hidden="true">→</span>
             </RouterLink>
+
+            <section v-if="webSecurityReport(message)" class="web-security-report" :data-risk="webSecurityReport(message)?.riskLevel">
+              <header>
+                <div>
+                  <small>WEB SECURITY INVESTIGATION</small>
+                  <strong>{{ webSecurityReport(message)?.host }}</strong>
+                  <span>{{ webSecurityReport(message)?.targetUrl }}</span>
+                </div>
+                <div class="web-security-score">
+                  <strong>{{ webSecurityReport(message)?.riskScore }}</strong><span>/ 100</span>
+                  <small>{{ securityRiskLabel(webSecurityReport(message)?.riskLevel ?? '') }}</small>
+                </div>
+              </header>
+              <div class="web-security-facts">
+                <article><span>协议</span><strong>{{ webSecurityReport(message)?.scheme }} : {{ webSecurityReport(message)?.port }}</strong></article>
+                <article><span>公网地址</span><strong>{{ webSecurityReport(message)?.resolvedAddresses.join(' · ') }}</strong></article>
+                <article><span>TLS</span><strong>{{ tlsValue(webSecurityReport(message), 'status') }}</strong></article>
+                <article><span>证书到期</span><strong>{{ tlsValue(webSecurityReport(message), 'notAfter') }}</strong></article>
+                <article><span>公开线索</span><strong>{{ webSecurityReport(message)?.threatIntelSourceCount }} 条</strong></article>
+                <article><span>任务耗时</span><strong>{{ webSecurityReport(message)?.durationMilliseconds }} ms</strong></article>
+              </div>
+              <div class="web-security-signals">
+                <strong>风险信号</strong>
+                <p v-if="!webSecurityReport(message)?.signals.length">当前受控检查未发现明显风险信号</p>
+                <div v-for="signal in webSecurityReport(message)?.signals ?? []" :key="signal.code">
+                  <span :data-severity="signal.severity">{{ signal.severity }}</span>
+                  <p>{{ signal.message }}</p><strong>+{{ signal.points }}</strong>
+                </div>
+              </div>
+              <details class="web-security-trace">
+                <summary>查看受控调查过程与能力边界</summary>
+                <ol>
+                  <li v-for="event in webSecurityReport(message)?.trace ?? []" :key="event.stage">
+                    <span>{{ securityStageLabel(event.stage) }}</span><strong>{{ event.status }}</strong><p>{{ event.summary }}</p>
+                  </li>
+                </ol>
+                <ul><li v-for="item in webSecurityReport(message)?.limitations ?? []" :key="item">{{ item }}</li></ul>
+              </details>
+            </section>
 
             <div v-if="groundingModes(message).length" class="assistant-grounding-modes">
               <span v-for="mode in groundingModes(message)" :key="mode">{{ modeLabel(mode) }}</span>
@@ -418,7 +481,7 @@ async function scrollToBottom() {
             v-model="prompt"
             rows="1"
             maxlength="8000"
-            placeholder="询问常识，或上传图片后描述你希望 Agent 调查的问题…"
+            placeholder="询问常识、粘贴可疑 URL，或上传图片后描述调查问题…"
             :disabled="sending"
             @keydown="onComposerKeydown"
           ></textarea>

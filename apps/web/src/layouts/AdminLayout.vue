@@ -12,6 +12,7 @@ const navigation = computed(() => [
   { label: '调查记录', path: '/admin/cases', permission: 'case:read' },
   { label: '取证知识库', path: '/admin/knowledge', permission: 'knowledge:read' },
   { label: '模型评测', path: '/admin/model-evaluation', permission: 'model:read' },
+  { label: 'Agent 评测', path: '/admin/agent-evaluation', permission: 'model:read' },
   { label: 'Agent 任务', path: '/admin/agent-tasks', permission: 'agent:trace:read' },
 ].filter((item) => !item.permission || auth.hasPermission(item.permission)))
 
