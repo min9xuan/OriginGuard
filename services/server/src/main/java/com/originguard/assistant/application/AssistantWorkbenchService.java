@@ -212,7 +212,7 @@ public class AssistantWorkbenchService {
         String goal = abbreviate("回答用户对当前" + (assets.size() > 1 ? assets.size() + " 张图片" : "媒体")
                 + "的具体问题：" + question
                 + "。逐图检测并比较媒体类型、感知相似性、C2PA 内容凭证与 AIGC 模型信号，形成跨图联合结论；知识不得替代模型证据，最终结果需要用户人工核验。", 500);
-        AgentTaskService.AgentTaskDetails pending = agentTaskService.create(caseId, goal, 13);
+        AgentTaskService.AgentTaskDetails pending = agentTaskService.create(caseId, goal, 15);
         UUID taskId = pending.task().id();
         AgentTaskDispatcher dispatcher = taskDispatcher.getIfAvailable();
         if (dispatcher != null) {

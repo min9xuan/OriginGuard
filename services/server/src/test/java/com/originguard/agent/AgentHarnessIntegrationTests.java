@@ -37,6 +37,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @SpringBootTest(properties = {
         "originguard.embedding.provider=deterministic",
         "originguard.agent.aigc-detector.provider=fake",
+        "originguard.agent.manipulation-localizer.provider=fake",
         "originguard.agent.media-type-classifier.provider=fake",
         "originguard.assistant.llm.provider=template",
         "originguard.assistant.web-search.provider=disabled"
@@ -146,11 +147,11 @@ class AgentHarnessIntegrationTests {
                         .header("Authorization", bearer(investigator))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"caseId":"%s","goal":"运行确定性媒体分析、生成内容鉴别与 RAG 流水线","stepBudget":13}
+                                {"caseId":"%s","goal":"运行确定性媒体分析、生成内容鉴别、篡改定位与 RAG 流水线","stepBudget":15}
                                 """.formatted(caseId)))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.task.status").value("PENDING"))
-                .andExpect(jsonPath("$.task.remainingStepBudget").value(13))
+                .andExpect(jsonPath("$.task.remainingStepBudget").value(15))
                 .andReturn();
         String taskId = JsonPath.read(created.getResponse().getContentAsString(), "$.task.id");
 
@@ -161,9 +162,9 @@ class AgentHarnessIntegrationTests {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.task.status").value("COMPLETED"))
                 .andExpect(jsonPath("$.task.selectedSkillCode").value("deterministic_media_rag_pipeline"))
-                .andExpect(jsonPath("$.task.selectedSkillVersion").value("1.4.0"))
+                .andExpect(jsonPath("$.task.selectedSkillVersion").value("1.5.0"))
                 .andExpect(jsonPath("$.task.remainingStepBudget").value(0))
-                .andExpect(jsonPath("$.task.checkpointVersion").value(6))
+                .andExpect(jsonPath("$.task.checkpointVersion").value(7))
                 .andExpect(jsonPath("$.task.conclusion.verdict").value("INCONCLUSIVE"))
                 .andExpect(jsonPath("$.steps[*].stepType", hasItem("PLAN_GENERATED")))
                 .andExpect(jsonPath("$.steps[*].stepType", hasItem("PLAN_VALIDATED")))
@@ -174,7 +175,7 @@ class AgentHarnessIntegrationTests {
                         .isNotEmpty())
                 .andExpect(jsonPath("$.steps[*].stepType", hasItem("TOOL_CALLED")))
                 .andExpect(jsonPath("$.steps[*].stepType", hasItem("CHECKPOINT_SAVED")))
-                .andExpect(jsonPath("$.observations.length()").value(6))
+                .andExpect(jsonPath("$.observations.length()").value(7))
                 .andExpect(jsonPath("$.observations[0].evidenceType").value("MEDIA_TYPE_CLASSIFICATION"))
                 .andExpect(jsonPath("$.observations[0].payload.mediaType").value("PHOTOGRAPH"))
                 .andExpect(jsonPath("$.observations[1].evidenceType").value("FILE_INTEGRITY"))
@@ -190,6 +191,8 @@ class AgentHarnessIntegrationTests {
                 .andExpect(jsonPath("$.observations[5].evidenceType").value("AIGC_DETECTION"))
                 .andExpect(jsonPath("$.observations[5].payload.provider").value("AIGC_DETECTOR_TEST_DOUBLE"))
                 .andExpect(jsonPath("$.observations[5].payload.classification").value("INCONCLUSIVE"))
+                .andExpect(jsonPath("$.observations[?(@.evidenceType == 'MANIPULATION_LOCALIZATION')].payload.provider")
+                        .value("MESORCH_TEST_DOUBLE"))
                 .andExpect(jsonPath("$.knowledgeRetrievals.length()").value(1))
                 .andExpect(jsonPath("$.knowledgeRetrievals[0].skillCode")
                         .value("retrieve_forensic_guidance"))
@@ -198,16 +201,16 @@ class AgentHarnessIntegrationTests {
                         .value("AIGC 媒体人工复核指引"))
                 .andExpect(jsonPath("$.knowledgeRetrievals[0].citations[0].documentVersion").value(1))
                 .andExpect(jsonPath("$.knowledgeRetrievals[0].citations[0].chunkId").isNotEmpty())
-                .andExpect(jsonPath("$.checkpoints.length()").value(6))
-                .andExpect(jsonPath("$.checkpoints[5].state.remainingStepBudget").value(1))
-                .andExpect(jsonPath("$.checkpoints[5].state.observationIds.length()").value(6))
-                .andExpect(jsonPath("$.checkpoints[5].state.knowledgeRetrievalIds.length()").value(1))
+                .andExpect(jsonPath("$.checkpoints.length()").value(7))
+                .andExpect(jsonPath("$.checkpoints[6].state.remainingStepBudget").value(1))
+                .andExpect(jsonPath("$.checkpoints[6].state.observationIds.length()").value(7))
+                .andExpect(jsonPath("$.checkpoints[6].state.knowledgeRetrievalIds.length()").value(1))
                 .andReturn();
         MvcResult confirmationWorkflow = mockMvc.perform(get("/api/v1/cases/{id}/workflow", caseId)
                         .header("Authorization", bearer(investigator)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.evidence.length()").value(0))
-                .andExpect(jsonPath("$.agentEvidenceCandidates.length()").value(6))
+                .andExpect(jsonPath("$.agentEvidenceCandidates.length()").value(7))
                 .andExpect(jsonPath("$.decisions[0].status").value("PENDING"))
                 .andReturn();
         String decisionId = JsonPath.read(
@@ -260,7 +263,7 @@ class AgentHarnessIntegrationTests {
                         .header("Authorization", bearer(investigator))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"caseId":"%s","goal":"比较案件图片相似度","stepBudget":13}
+                                {"caseId":"%s","goal":"比较案件图片相似度","stepBudget":15}
                                 """.formatted(caseId)))
                 .andExpect(status().isCreated())
                 .andReturn();

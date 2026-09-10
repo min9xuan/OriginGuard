@@ -20,6 +20,7 @@ public class SkillRegistry {
     public static final String SIMILARITY_SKILL = "compare_perceptual_similarity";
     public static final String MEDIA_TYPE_SKILL = "classify_media_type_with_clip";
     public static final String AIGC_DETECTION_SKILL = "detect_aigc_with_aide";
+    public static final String MANIPULATION_LOCALIZATION_SKILL = "localize_image_manipulation";
     public static final String RAG_SKILL = "retrieve_forensic_guidance";
     public static final String SKILL_VERSION = "1.0.0";
 

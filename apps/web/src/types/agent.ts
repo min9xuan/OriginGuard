@@ -48,6 +48,7 @@ export interface AgentObservation {
     | 'MEDIA_TYPE_CLASSIFICATION'
     | 'CONTENT_PROVENANCE'
     | 'AIGC_DETECTION'
+    | 'MANIPULATION_LOCALIZATION'
   summary: string
   payload: Record<string, unknown>
   createdAt: string

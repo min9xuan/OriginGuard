@@ -120,17 +120,6 @@ public class ForensicModelRegistry {
                         Set.of("PROBABILITY", "VERDICT", "ATTENTION_MAP"),
                         90,
                         "面向三维渲染和游戏画面的专用鉴别能力。",
-                        List.of("尚未接入可执行模型")),
-                new ForensicModelCapability(
-                        "manipulation_localization",
-                        "局部篡改定位",
-                        "planned",
-                        "MANIPULATION_LOCALIZATION",
-                        Set.of("IMAGE"),
-                        Set.of(ForensicModelCapability.ANY_MEDIA_TYPE),
-                        Set.of("TAMPER_PROBABILITY", "LOCALIZATION_MASK"),
-                        80,
-                        "定位拼接、修补或局部生成区域。",
                         List.of("尚未接入可执行模型")));
     }
 

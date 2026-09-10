@@ -25,6 +25,11 @@ from originguard_model_api.diffusion_verifier import (
     DiffusionVerifier,
     LocalDiffusionVerifier,
 )
+from originguard_model_api.manipulation_locator import (
+    LocalMesorchLocator,
+    ManipulationLocalization,
+    ManipulationLocator,
+)
 
 MODEL_CODE = "LOCAL_BGE_SMALL_ZH_V1_5"
 MODEL_NAME = "BAAI/bge-small-zh-v1.5"
@@ -131,6 +136,7 @@ _aide_detector: AideDetector = LocalAideDetector(_REPOSITORY_ROOT, _RUNTIME_ROOT
 _clip_detector: ClipDetector = LocalClipDetector(_REPOSITORY_ROOT, _RUNTIME_ROOT)
 _anime_detector: AnimeDetector = LocalAnimeDetector(_REPOSITORY_ROOT, _RUNTIME_ROOT)
 _diffusion_verifier: DiffusionVerifier = LocalDiffusionVerifier(_REPOSITORY_ROOT, _RUNTIME_ROOT)
+_manipulation_locator: ManipulationLocator = LocalMesorchLocator(_REPOSITORY_ROOT, _RUNTIME_ROOT)
 
 
 def get_embedding_service() -> EmbeddingService:
@@ -153,11 +159,16 @@ def get_diffusion_verifier() -> DiffusionVerifier:
     return _diffusion_verifier
 
 
+def get_manipulation_locator() -> ManipulationLocator:
+    return _manipulation_locator
+
+
 EmbeddingServiceDependency = Annotated[EmbeddingService, Depends(get_embedding_service)]
 AideDetectorDependency = Annotated[AideDetector, Depends(get_aide_detector)]
 ClipDetectorDependency = Annotated[ClipDetector, Depends(get_clip_detector)]
 AnimeDetectorDependency = Annotated[AnimeDetector, Depends(get_anime_detector)]
 DiffusionVerifierDependency = Annotated[DiffusionVerifier, Depends(get_diffusion_verifier)]
+ManipulationLocatorDependency = Annotated[ManipulationLocator, Depends(get_manipulation_locator)]
 
 
 app = FastAPI(title="OriginGuard Model API", version="0.8.0")
@@ -170,6 +181,7 @@ def health(
     clip_detector: ClipDetectorDependency,
     anime_detector: AnimeDetectorDependency,
     diffusion_verifier: DiffusionVerifierDependency,
+    manipulation_locator: ManipulationLocatorDependency,
 ) -> dict[str, object]:
     return {
         "status": "UP",
@@ -190,6 +202,8 @@ def health(
         },
         "diffusionVerifierConfigured": diffusion_verifier.configured,
         "diffusionVerifierLoaded": diffusion_verifier.loaded,
+        "manipulationLocatorConfigured": manipulation_locator.configured,
+        "manipulationLocatorLoaded": manipulation_locator.loaded,
     }
 
 
@@ -200,6 +214,7 @@ def list_models(
     clip_detector: ClipDetectorDependency,
     anime_detector: AnimeDetectorDependency,
     diffusion_verifier: DiffusionVerifierDependency,
+    manipulation_locator: ManipulationLocatorDependency,
 ) -> dict[str, list[object]]:
     return {
         "items": [
@@ -245,6 +260,15 @@ def list_models(
                 "type": "AIGC_AUXILIARY_VERIFICATION",
                 "configured": diffusion_verifier.configured,
                 "loaded": diffusion_verifier.loaded,
+            },
+            {
+                "code": "MESORCH_MANIPULATION_LOCALIZER",
+                "name": "Mesorch image manipulation localization",
+                "type": "IMAGE_MANIPULATION_LOCALIZATION",
+                "configured": manipulation_locator.configured,
+                "loaded": manipulation_locator.loaded,
+                "device": manipulation_locator.device_name,
+                "outputs": ["TAMPER_PROBABILITY", "LOCALIZATION_MASK", "HEATMAP", "OVERLAY"],
             },
         ]
     }
@@ -316,6 +340,25 @@ async def verify_diffusion_reconstruction(
     try:
         return verifier.verify(await request.body(), suffix)
     except (FileNotFoundError, RuntimeError) as exception:
+        raise HTTPException(status_code=503, detail=str(exception)) from exception
+    except ValueError as exception:
+        raise HTTPException(status_code=422, detail=str(exception)) from exception
+
+
+@app.post(
+    "/v1/forensics/manipulation/localize",
+    response_model=ManipulationLocalization,
+)
+async def localize_image_manipulation(
+    request: Request,
+    locator: ManipulationLocatorDependency,
+) -> ManipulationLocalization:
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
+    if not content_type.startswith("image/"):
+        raise HTTPException(status_code=415, detail="Manipulation localizer accepts image content only")
+    try:
+        return locator.locate(await request.body())
+    except (FileNotFoundError, RuntimeError, TypeError) as exception:
         raise HTTPException(status_code=503, detail=str(exception)) from exception
     except ValueError as exception:
         raise HTTPException(status_code=422, detail=str(exception)) from exception

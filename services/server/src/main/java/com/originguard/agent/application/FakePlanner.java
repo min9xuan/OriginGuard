@@ -12,7 +12,7 @@ import org.springframework.stereotype.Component;
         matchIfMissing = true)
 public class FakePlanner implements AgentPlanner {
     public static final String PLAN_CODE = "deterministic_media_rag_pipeline";
-    public static final String PLAN_VERSION = "1.4.0";
+    public static final String PLAN_VERSION = "1.5.0";
 
     public PlannerPlan plan(AgentExecutionContext context, String goal) {
         List<SkillSelection> skills = List.of(
@@ -32,6 +32,10 @@ public class FakePlanner implements AgentPlanner {
                         SkillRegistry.AIGC_DETECTION_SKILL,
                         SkillRegistry.SKILL_VERSION,
                         "Run the generative-content detector after CLIP media typing and interpret the score within that media domain"),
+                new SkillSelection(
+                        SkillRegistry.MANIPULATION_LOCALIZATION_SKILL,
+                        SkillRegistry.SKILL_VERSION,
+                        "Run pixel-level manipulation localization and preserve masks for human verification"),
                 new SkillSelection(
                         SkillRegistry.RAG_SKILL,
                         SkillRegistry.SKILL_VERSION,

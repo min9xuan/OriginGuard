@@ -18,11 +18,17 @@ public class AgentArtifactStorage {
 
     public StoredArtifact storeAttentionOverlay(
             UUID tenantId, UUID taskId, UUID assetId, byte[] content) {
+        return storeVisualization(
+                tenantId, taskId, assetId, content, "AIGC_DETECTION_ATTENTION_OVERLAY");
+    }
+
+    public StoredArtifact storeVisualization(
+            UUID tenantId, UUID taskId, UUID assetId, byte[] content, String kind) {
         UUID artifactId = UUID.randomUUID();
         String objectKey = objectKey(tenantId, taskId, assetId, artifactId);
         objectStorage.put(objectKey, content, CONTENT_TYPE);
         return new StoredArtifact(
-                artifactId, "AIGC_DETECTION_ATTENTION_OVERLAY", CONTENT_TYPE,
+                artifactId, kind, CONTENT_TYPE,
                 content.length, sha256(content));
     }
 

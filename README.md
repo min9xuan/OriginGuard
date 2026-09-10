@@ -1,323 +1,275 @@
+<div align="center">
+
 # OriginGuard
 
-面向 AIGC 媒体真实性分析的多模态 Agent 系统。
+### 面向 AIGC 媒体真实性分析的可审计多模态 Agent
 
-OriginGuard 不让单个大模型直接猜测图片真假，而是通过 Agent Harness 读取媒体上下文、制定调查计划、调用受控取证能力、记录 Observation，并根据新结果动态调整后续步骤。系统最终给出可解释的初步判断，由用户完成人工核验。
+不是让单个模型直接猜真假，而是让 Agent 规划并调用受控取证能力，保留证据、来源、限制和完整执行轨迹，再由用户完成最终核验。
 
-## 当前能力
+![Vue 3](https://img.shields.io/badge/Vue-3-5f817f?style=flat-square)
+![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4-5f817f?style=flat-square)
+![Python](https://img.shields.io/badge/Python-3.11-526274?style=flat-square)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-pgvector-526274?style=flat-square)
+![License](https://img.shields.io/badge/License-MIT-273443?style=flat-square)
 
-### 用户检测流程
+</div>
 
-- 产品展示首页与独立登录入口
-- JPEG、PNG、WebP 图片上传，单文件最大 25 MB；一次可选择最多 8 张进行联合分析
-- 文件魔数、MIME、图片解码、大小与像素上限校验
-- 浏览器 SHA-256 计算与服务端内容指纹复核
-- 自动创建内部分析记录并启动 Agent，无需用户手工配置案件字段
-- 检测记录、原图预览、分析过程与人工核验结果查询
-- 用户可选择“AI 生成”“非 AI 生成”或“暂时无法判断”，并决定是否引用 Agent 的结论与理由
-- 顶部导航显示当前登录状态与账号，支持退出后切换用户
-- 支持删除单个对话，以及删除本人已结束的 Agent 分析任务；运行中的任务会被保护
+---
+
+## 产品概览
+
+OriginGuard 是一个对话式媒体调查工作台。普通问题由本地大模型直接回答；当用户询问具体图片是否由 AI 生成、是否被修改或来源是否可信时，系统会把问题与受约束的取证方案结合，异步执行 Agent 任务。
+
+```text
+用户问题与媒体
+      ↓
+意图识别 ── 普通问答 ──→ LLM 直接回答
+      │
+      └──── 媒体调查 ──→ Context → Plan → Validate → Act → Observe
+                                              ↑              ↓
+                                        Replan / Stop ← Observation
+                                                            ↓
+                              AIGC 检测 · 篡改定位 · C2PA · RAG
+                                                            ↓
+                                      可解释初步判断 → 人工核验
+```
+
+### 设计原则
+
+- **模型不越权**：LLM 负责理解、规划和解释，不直接制造取证事实。
+- **证据可追溯**：模型版本、权重指纹、输入资产、工具结果和引用来源均可回看。
+- **结论可反驳**：正向信号、反向信号、缺失证据和能力限制同时展示。
+- **失败可降级**：可选模型、Redis 或网络来源不可用时保留状态，不伪造结果。
+- **最终由人确认**：Agent 只形成初步方向，不代替调查员作最终结论。
+
+## 核心能力
+
+### 对话式调查工作台
+
+- 支持常识问答、上下文追问和媒体取证意图识别。
+- 一次上传最多 8 张 JPEG、PNG 或 WebP 图片，单文件最大 25 MB。
+- 自动创建分析记录并启动 Agent，无需用户填写案件字段。
+- 多图结果通过左右切换集中展示，不把每张图片的相同结果纵向堆叠。
+- 可删除不再需要的对话和已结束的 Agent 任务；运行中任务受保护。
+- 登录状态、账号菜单、退出登录和管理入口具有明确权限边界。
 
 ### Agent Harness
 
-```text
-Context → Plan → Validate → Act → Observe → Replan / Stop → Synthesize
-```
+- 本地多模态 LLM 根据用户目标、媒体类型和知识上下文生成计划。
+- 声明式 Skill、Tool 白名单、RBAC、案件状态约束和 Step Budget。
+- Observation 驱动动态重规划，并对异常计划提供确定性安全降级。
+- RabbitMQ 异步执行，SSE 实时推送步骤、结果和失败状态。
+- Checkpoint、幂等消费、死信队列、Redis 入队去重与用户级限流。
+- 基于真实任务 Trace 的 Agent Evaluation，覆盖规划、工具选择、证据忠实度、鲁棒性和性能。
 
-- 本地多模态 LLM 根据图片类型、调查目标和知识上下文生成受约束计划
-- 声明式 Skill、Tool 白名单、权限策略、案件状态约束和 Step Budget
-- Observation 驱动的动态重规划，并为异常决策提供安全降级
-- 每次模型选择、工具调用、Observation、Checkpoint 和计划调整均持久化留痕
-- 执行抽屉实时展示当前阶段、模型回复摘要和可审计事件
-- Agent 行为评测：使用真实任务 Trace 按工具选择、规划重规划、目标覆盖、证据忠实度、鲁棒性和性能执行确定性评分
-- 受控 Web 安全调查：工作台识别可疑 URL，阻断内网和危险目标后记录 DNS、TLS、IOC、风险信号与公开威胁线索
-- Agent 只形成初步判断，不代替用户的最终核验
+### 媒体取证
 
-### 媒体取证能力
+| 能力 | 当前实现 | 输出与定位 |
+| --- | --- | --- |
+| 媒体类型识别 | OpenAI CLIP | 区分摄影、动漫、数字插画、矢量卡通、3D、截图和平面设计；只参与路由 |
+| AIGC 生成检测 | 通用多特征检测器 | 整图生成概率、质量门控、初步方向和语义注意力图 |
+| 动漫/漫画检测 | AniXplore 可选适配 | 动漫域整图分数和像素响应；需要安装官方源码与权重 |
+| 跨模型融合 | 通用模型 + 领域模型 | 独立读取原图；方向冲突时返回证据冲突，不强行投票 |
+| 扩散重建复核 | AEROBLADE 可选适配 | 输出重建距离，只作为辅助信号，不包装成生成概率 |
+| 局部篡改定位 | Mesorch 可选适配 | 掩码、热力图、原图叠加图、候选区域和响应统计 |
+| 来源溯源 | C2PA Sidecar | 验证内容凭证、签名、文件绑定和声明的编辑动作 |
+| 基础取证 | 内部工具 | 文件哈希、格式、尺寸、EXIF、完整性与多图感知相似度 |
 
-- 媒体类型识别：区分摄影、动漫/漫画、数字绘画、矢量卡通、三维渲染、界面截图和平面设计
-- 生成内容鉴别：输出 AI 生成概率、阈值判断、质量评估和语义注意力图
-- 动漫/漫画专用鉴别：仅在内容被路由为动漫或漫画时使用 AniXplore，输出整图分数和像素级疑似生成区域
-- 跨模型融合：动漫专用模型与通用模型独立读取原图并交叉复核；方向冲突时返回“证据冲突”，不会强行选择一方
-- 扩散重建复核：对疑似扩散模型图像计算重建距离，作为独立辅助观察
-- 文件完整性检查：核对登记哈希、存储内容和文件大小
-- 图片元数据提取：记录格式、尺寸和可用 EXIF 摘要
-- 感知相似度：在存在多张可比图片时进行辅助比较
-- 多图联合分析：逐图保留模型概率与凭证状态，并汇总相同/近重复关系和跨图结论
-- C2PA 来源溯源：验证内容凭证、文件绑定、声明工具与编辑动作；无凭证只记为“未发现”，不作为真假证据
-- 结果解释：由本地多模态 LLM 综合模型信号、媒体事实与能力限制，生成中文说明
+> CLIP 类型分数和注意力图不是真假证据；Mesorch 响应分数也不是“发生篡改的确定概率”。未校准信号会在界面中明确标记，必须结合原图、来源凭证和人工核验。
 
-媒体类型只用于选择取证能力和解释模型适用边界，不直接参与 AIGC 真伪投票；注意力图也不等同于精确生成区域或篡改区域。
+### 多源 RAG
 
-### 可插拔模型路由
+`RetrievalOrchestrator` 统一调度以下上下文：
 
-```text
-ForensicModelAdapter
-→ ForensicModelRegistry
-→ ModelRoute
-→ Unified Forensic Observation
-```
+1. 模型自身知识与当前对话；
+2. 管理员发布的租户知识库；
+3. OpenAlex 学术元数据与摘要；
+4. 可选的 Tavily 通用网页搜索。
 
-- 每个模型声明能力代码、版本、用途、媒体类型、标准输出和优先级
-- Agent 根据媒体类型选择当前优先级最高的可用模型
-- 专用模型缺失时明确标记“降级执行”，不会把通用结果包装成专用结论
-- 统一 Observation 保存概率、判断、置信度、质量、可视化、限制和路由原因
-- 新模型实现 `ForensicModelAdapter` 并注册为 Spring Bean 后即可参与路由
-- `GET /api/v1/agent-tasks/model-capabilities` 可查询当前模型能力目录
+普通问答按需使用网页搜索；专业 AIGC 调查优先计算机视觉顶会、CCF-A、IEEE 等可核验学术来源。知识只影响调查计划、方法解释和限制说明，不直接修改检测概率。若检索内容影响结论，LLM 会总结具体影响并随引用展示。
 
-当前已经具备通用图像生成内容鉴别能力；动漫/漫画专用模型和扩散重建复核器已完成可执行适配，安装权重与可选依赖后会自动参与路由。数字绘画与矢量卡通不会再误路由到 AniXplore：当前会明确降级到通用模型并暴露跨域专用模型缺口。C2PA 已通过独立 sidecar 接入，三维渲染鉴别与局部篡改定位仍保留插件接口。
+### Web 安全调查
 
-实现说明见 [M5.3 可插拔取证模型注册与动态路由](docs/product/m5.3-forensic-model-routing.md)。
+工作台可以对用户明确提交的 HTTP/HTTPS URL 进行防御性初筛：
 
-### Agent Evaluation
+- SSRF 目标校验与内网地址阻断；
+- 公网 DNS、TLS 证书和主机名核验；
+- URL 与 IOC 风险规则；
+- 可选实时公开威胁线索检索。
 
-- 管理端可建立可复用评测规则，声明必须/禁止的 Skill 与 Observation
-- 对已经结束的真实 Agent 任务读取 Trace、Observation 与 Checkpoint，不修改原任务
-- 检查工具调用预算、重规划次数、重复动态决策、总耗时和任务终态
-- 证据冲突被确定结论覆盖、取消人工核验或调用禁用能力会被标记为关键失败
-- 保存六个维度的得分、违规原因和原始计数，可用同一规则比较不同版本任务
-- 评分器采用确定性规则，不让被评测 Agent 或另一个 LLM 直接决定是否通过
+系统不会执行目标页面内容，公开搜索结果也不会直接修改风险分。详见 [M6.2 受控 Web 安全调查](docs/product/m6.2-web-security-investigation.md)。
 
-实现说明见 [M6.1 Agent 行为评测基线](docs/product/m6.1-agent-evaluation.md)。
-
-### Web Security Investigation
-
-工作台支持对明确的 HTTP/HTTPS URL 发起防御性初筛。系统不会直接下载或执行目标页面内容，而是在 SSRF 策略校验后完成公网 DNS、TLS 证书与主机名核验、URL 风险规则评分以及可选实时网页线索检索。公开搜索结果不会直接修改风险分，所有恶意定性仍需人工核验。
-
-实现和安全边界见 [M6.2 受控 Web 安全调查](docs/product/m6.2-web-security-investigation.md)。
-
-### 统一检索与 RAG 增强
-
-- `RetrievalOrchestrator` 统一调度模型知识、会话上下文、已发布知识库和实时网络来源
-- Markdown 和纯文本知识文档管理、草稿管理与版本发布
-- 中文 Embedding、pgvector 向量索引和 PostgreSQL 全文检索
-- 语义分数、关键词分数、来源优先级共同参与混合召回
-- 用户自建知识优先于外部学术候选知识
-- 普通问答按需使用通用网页搜索；专业 AIGC 检测强制使用学术检索策略
-- 专业检索优先已发布知识、维护的计算机视觉/AI 顶级会议与期刊、IEEE 期刊，再考虑其他可核验学术来源
-- 系统不会依据期刊名称猜测分区；未核验的 IEEE/其他期刊会明确标记仍需按年份和分区体系复核
-- 默认实时学术源为 OpenAlex；配置 Tavily 后可为普通问题扩展通用网页搜索
-- 按需检索权威论文元数据与摘要，不自动下载论文 PDF
-- 外部知识先保存为草稿，确认发布后才进入 Agent 检索范围
-- Citation 保存文档版本、知识片段、排序和各项召回分数
-- LLM 会总结哪些检索来源实际影响了回答、方案选择或限制说明，并随引用展示
-- 知识库与网络材料只为规划、方法说明和结果解释提供参考，不直接改变模型概率或构成图片真伪证据
-
-### 对话式分析工作台
-
-- 常识性问题由本地大模型直接回答，不创建案件或 Agent 任务
-- 涉及具体图片真实性、生成来源或媒体取证的问题会自动路由到 Agent
-- Agent 把用户问题与受控取证方案合并，执行媒体理解、模型检测、证据整理与结果解释
-- 回答保留正向信号、反向信号、缺失证据和能力限制，并提供完整任务过程入口
-- 对话可继续追问，并复用本轮上下文和最近一次上传的媒体
-- 用户可以删除不再需要的单个对话，避免会话与来源材料无限累积
-
-相关配置见 `.env.example` 中的 `ASSISTANT_LLM_PROVIDER`、`WEB_SEARCH_PROVIDER` 与可选的 `TAVILY_API_KEY`。本地运行时复制为根目录 `.env`；`scripts/start-local-stack.ps1` 会自动加载它，且不会覆盖当前 PowerShell 已显式设置的环境变量。真实密钥只写入被 Git 忽略的 `.env`，不要写入 `.env.example`。
-
-## 技术栈
-
-- Web：Vue 3、TypeScript、Vite、Element Plus
-- 业务与 Agent 中枢：Java 22、Spring Boot、Spring Security、Flyway、Maven
-- 模型服务：Python 3.11、FastAPI、PyTorch、Transformers
-- 数据与检索：PostgreSQL、pgvector
-- 对象存储：MinIO
-- 基础设施：Docker Compose、RabbitMQ、Redis
-- 异步执行：RabbitMQ 持久化 Agent 任务队列、幂等消费与死信队列
-- 实时状态：SSE 推送任务步骤、完成和失败事件
-- 性能保护：Redis 模型结果缓存、入队去重与用户级固定窗口限流
-
-Agent 创建和 HTTP 请求已经与实际取证执行解耦：接口返回 `202 Accepted` 后由 RabbitMQ
-消费者运行任务；前端通过 SSE 持续接收进度。Redis 不保存案件主数据，只用于可失效的缓存、
-短期入队去重和每用户限流；Redis 暂时不可用时，取证能力会降级运行而不是丢失业务数据。
-
-## 系统结构
+## 系统架构
 
 ```text
-apps/web                    用户端、检测记录与隐藏管理端
-services/server             身份安全、业务流程、Agent Harness 与 RAG
-services/model-api          Embedding、媒体分类和取证模型 API
-services/c2pa-sidecar       C2PA 内容凭证验证与标准化适配器
-workers/model-worker        独立模型 Worker 扩展目录
-packages/api-contract       OpenAPI 契约
-packages/event-schema       异步事件契约
-knowledge-base              受控知识源
-infra                       基础设施配置
-docs                        架构、产品、安全和 ADR
-scripts                     本地环境与统一启动脚本
-tests                       跨服务测试与评测入口
+┌──────────────────────────── Vue 3 Web ────────────────────────────┐
+│ 对话工作台 · 多图浏览 · Agent 过程 · 证据详情 · 人工核验 · 管理端 │
+└────────────────────────────────┬──────────────────────────────────┘
+                                 │ REST + SSE
+┌────────────────────────────────▼──────────────────────────────────┐
+│                    Spring Boot Application                       │
+│ Identity/RBAC · Investigation · Agent Harness · Retrieval · Audit│
+└───────────────┬────────────────┬─────────────────┬────────────────┘
+                │                │                 │
+        RabbitMQ Worker     PostgreSQL/pgvector   Redis
+                │            MinIO Object Store   Cache/Rate Limit
+                │
+┌───────────────▼───────────────────────────────────────────────────┐
+│ Python Model API                                                  │
+│ Embedding · CLIP · AIGC Detector · AniXplore · AEROBLADE · Mesorch│
+└───────────────────────────────┬───────────────────────────────────┘
+                                │
+                         C2PA Verification Sidecar
 ```
 
-## 快速启动
+### 目录结构
+
+```text
+apps/web                 用户端、调查工作台与管理端
+services/server          身份、业务流程、Agent Harness、RAG 与审计
+services/model-api       Embedding、媒体理解和取证模型 API
+services/c2pa-sidecar    C2PA 内容凭证验证适配器
+packages                 API 与事件契约
+knowledge-base           受控知识源
+infra                    PostgreSQL、MinIO、Redis、RabbitMQ
+docs                     产品说明、架构、安全与 ADR
+scripts                  环境安装和本地统一启停脚本
+```
+
+## 快速开始
 
 ### 环境要求
 
 - Windows 10/11
-- Java 22
-- Maven 3.9+
+- Java 22、Maven 3.9+
 - Python 3.11
-- Node.js 22+
-- npm 10+
-- Docker Desktop 与 Docker Compose v2
-- 本地模型资源已放入项目 `.runtime` 对应目录
+- Node.js 22+、npm 10+
+- Docker Desktop、Docker Compose v2
 
-### 启动全部服务
+### 1. 配置环境
 
-在项目根目录运行：
+```powershell
+Copy-Item .env.example .env
+```
+
+只在 `.env` 中填写真实密钥和本机路径。`.env` 已被 Git 忽略，任何密钥都不应写进 `.env.example`。
+
+### 2. 启动本地服务
 
 ```powershell
 .\scripts\start-local-stack.ps1
 ```
 
-统一脚本会启动：
+脚本会启动 PostgreSQL/pgvector、MinIO、Redis、RabbitMQ、Model API、C2PA Sidecar、本地 LLM、Spring Boot 后端和 Vue 前端，并把 PID 与日志保存在 `.runtime`。
 
-- PostgreSQL / pgvector
-- MinIO
-- Redis
-- RabbitMQ
-- Python Model API
-- C2PA 验证 Sidecar（未安装 c2patool 时以未配置状态安全运行）
-- 本地多模态 LLM API
-- Spring Boot 后端
-- Vue 前端
+| 服务 | 地址 |
+| --- | --- |
+| 产品首页 | <http://127.0.0.1:5173> |
+| 用户工作台 | <http://127.0.0.1:5173/analyze> |
+| 管理端 | <http://127.0.0.1:5173/admin> |
+| 后端健康检查 | <http://127.0.0.1:18080/actuator/health> |
+| 模型服务健康检查 | <http://127.0.0.1:8090/health> |
+| C2PA 健康检查 | <http://127.0.0.1:8091/health> |
+| RabbitMQ 管理台 | <http://127.0.0.1:15672> |
 
-启动完成后访问：
-
-- 产品首页：<http://127.0.0.1:5173>
-- 用户分析入口：<http://127.0.0.1:5173/analyze>
-- 管理端入口：<http://127.0.0.1:5173/admin>
-- 后端健康检查：<http://127.0.0.1:18080/actuator/health>
-- 模型服务健康检查：<http://127.0.0.1:8090/health>
-- C2PA 服务健康检查：<http://127.0.0.1:8091/health>
-- RabbitMQ 管理台：<http://127.0.0.1:15672>
-
-### Agent 性能指标
-
-每个完成任务会在结论的 `performance` 字段和最终执行事件中记录：
-
-- `queueWaitMillis`：任务从创建到消费者开始执行的等待时间
-- `executionDurationMillis`：消费者内部实际执行 Agent 的时间
-- `endToEndMillis`：创建任务到结果完成的总时间
-- `cacheHitCount`：本次任务复用模型检测缓存的次数
-
-异步化主要缩短用户请求的阻塞时间并提高并发承载力，不会凭空缩短一次冷模型推理；同一媒体、
-同一模型能力再次分析时，Redis 缓存才会显著减少重复模型调用。实际提升应以相同媒体的冷、热两次
-任务以及历史同步任务的上述指标为准。
-
-脚本以后台进程方式运行服务，并将 PID 与日志保存在 `.runtime`。启动结束后当前终端可以继续输入命令。
-
-首次启用 C2PA 前安装官方验证工具：
-
-```powershell
-.\scripts\setup-c2pa.ps1
-```
-
-二进制、上传媒体和验证临时文件均位于 `.runtime` 或系统临时目录，不会提交到 Git。
-
-### 停止全部服务
+停止全部服务：
 
 ```powershell
 .\scripts\stop-local-stack.ps1
 ```
 
-## 本地演示账号
+### 演示账号
 
-| 入口 | 账号 | 初始密码 | 用途 |
+| 入口 | 用户名 | 默认密码 | 权限 |
 | --- | --- | --- | --- |
-| `/login` | `investigator` | `OriginGuard@123` | 上传图片、运行分析、查看记录、人工核验 |
-| `/admin/login` | `admin` | `OriginGuard@123` | 系统配置、知识管理、能力查看和运行审计 |
+| `/login` | `investigator` | `OriginGuard@123` | 上传、分析、查看记录和人工核验 |
+| `/admin/login` | `admin` | `OriginGuard@123` | 系统配置、知识管理、能力目录与审计 |
 
-管理端不会出现在普通用户登录页中。演示密码可通过 `ORIGINGUARD_DEMO_PASSWORD` 覆盖，不得用于生产环境。
+默认密码可通过 `ORIGINGUARD_DEMO_PASSWORD` 覆盖，禁止用于生产环境。
 
-## 一次完整分析的数据流
+## 可选模型安装
 
-```text
-用户选择图片
-→ 浏览器检查文件签名并计算 SHA-256
-→ 后端再次验证图片并保存到 MinIO
-→ 系统自动创建分析记录和 Agent Task
-→ 媒体分类模型识别图片类型
-→ RetrievalOrchestrator 获取已发布知识与质量排序后的学术来源
-→ LLM 生成受约束调查计划
-→ Harness 校验 Skill、Tool、权限与预算
-→ 模型注册中心选择适用取证模型
-→ 工具执行并保存统一 Observation
-→ LLM 根据 Observation 决定继续、重规划或停止
-→ 汇总生成可解释的 Agent 初步判断
-→ 用户查看原图、概率、注意力图、知识依据、检索影响和能力限制
-→ 用户完成人工核验
+模型源码、权重和缓存只写入 `.runtime`，不会提交到 Git。
+
+```powershell
+# 动漫/漫画专用检测
+.\scripts\setup-anixplore.ps1 -CheckpointPath D:\path\to\official-checkpoint.pth
+
+# 扩散重建复核
+.\scripts\setup-aeroblade.ps1
+
+# 局部篡改定位
+.\scripts\setup-mesorch.ps1 -CheckpointPath D:\path\to\mesorch-98.pth
+
+# C2PA 官方验证工具
+.\scripts\setup-c2pa.ps1
 ```
 
-系统内部仍保留分析记录状态、乐观锁、数据隔离和追加式审计，用于保证并发安全和可追溯性；这些实现细节不会要求普通用户手工操作。
+可选模型未安装时不会阻止系统启动：对应能力会记录为 `UNAVAILABLE`，Agent 继续处理其他证据。Mesorch 的完整配置和输出约定见 [M6.3 图像篡改定位](docs/product/m6.3-image-manipulation-localization.md)。
 
-## 身份与安全
+## 任务性能与可观测性
 
-- JWT Access Token 与 HttpOnly Refresh Cookie 轮换
-- 普通用户和管理员两类入口与权限边界
-- 用户端明确显示登录状态、当前账号和退出入口，退出后可使用其他账号重新登录
-- 管理员不能替用户确认最终检测结果
-- 所有业务查询均带数据隔离上下文
-- Agent 只能调用受控应用工具，不能执行任意 Shell、SQL 或外部 URL
-- 上传媒体、EXIF、模型输出和知识文档都按不可信输入处理
-- 不提交 `.env`、访问密钥、模型权重、上传内容、日志和运行缓存
-- 案件状态更新使用乐观锁，防止并发请求静默覆盖结果
+每个完成的 Agent 任务都会保存：
 
-相关决策见 [ADR-007 用户负责结果确认](docs/adr/ADR-007-investigator-owned-result-confirmation.md)。
+| 指标 | 含义 |
+| --- | --- |
+| `queueWaitMillis` | 创建任务到消费者开始执行的等待时间 |
+| `executionDurationMillis` | Agent 在消费者中的实际执行时间 |
+| `endToEndMillis` | 创建任务到完成的总时间 |
+| `cacheHitCount` | 媒体理解、检测或定位结果的缓存命中次数 |
+
+RabbitMQ 主要降低 HTTP 请求阻塞并提升并发承载能力，不会缩短一次冷模型推理。相同媒体与相同模型配置的热缓存任务才会显著降低耗时。
+
+## 安全边界
+
+- JWT Access Token 与 HttpOnly Refresh Cookie 轮换。
+- 普通用户和管理员入口、权限与数据范围分离。
+- 上传文件同时执行浏览器 SHA-256、服务端魔数/MIME、解码和像素上限校验。
+- Agent 只能调用注册的受控工具，不能执行任意 Shell、SQL 或外部 URL。
+- 媒体、EXIF、模型输出、网页和知识文档均按不可信输入处理。
+- 案件状态更新使用乐观锁；关键操作写入追加式审计日志。
+- `.env`、密钥、模型权重、上传媒体、日志和运行缓存不会提交到 Git。
 
 ## 测试与构建
 
-前端：
-
 ```powershell
+# 前端
 cd apps/web
-npm run test -- --run
+npm test
 npm run build
-```
 
-后端：
-
-```powershell
-cd services/server
+# Java 后端（集成测试需要可用的 Docker）
+cd ../../services/server
 mvn test
+
+# Python Model API
+cd ../model-api
+python -m pytest
+python -m ruff check src tests
+python -m mypy --config-file pyproject.toml src
 ```
 
-后端集成测试通过 Testcontainers 启动隔离的 PostgreSQL、pgvector 与 MinIO，不会写入本地开发数据库。
+## 文档
 
-## 本地数据与模型目录
+- [Agent 行为评测基线](docs/product/m6.1-agent-evaluation.md)
+- [受控 Web 安全调查](docs/product/m6.2-web-security-investigation.md)
+- [图像篡改定位](docs/product/m6.3-image-manipulation-localization.md)
+- [可插拔取证模型路由](docs/product/m5.3-forensic-model-routing.md)
+- [用户负责结果确认](docs/adr/ADR-007-investigator-owned-result-confirmation.md)
 
-以下内容只保存在本机，不进入 Git：
+## 路线图
 
-```text
-.runtime/models             模型权重
-.runtime/cache              模型与运行缓存
-.runtime/logs               统一启动日志
-.runtime/pids               后台进程信息
-.data                       Docker 持久化数据
-```
+- 使用固定业务验证集校准 AIGC 分类器、AniXplore 与 Mesorch 阈值。
+- 按 IMDL-BenCo 协议评估图像级和像素级篡改定位性能。
+- 接入数字绘画、矢量卡通和 3D 渲染的跨域专用检测能力。
+- 扩展视频抽帧、关键帧检测和时序一致性分析。
+- 提供可导出的结构化真实性分析报告。
+- 增加工具超时、消息重复投递、提示注入和 Checkpoint 恢复评测。
 
-### 可选取证模型
+## 使用声明
 
-动漫/漫画专用模型：
+OriginGuard 输出的是辅助调查信息，不是法律、新闻核验或平台治理中的自动最终裁决。模型分数、热力图、网络材料和来源凭证都应由具备相应背景的人员结合原始媒体核验。
 
-```powershell
-.\scripts\setup-anixplore.ps1 -CheckpointPath D:\path\to\official-checkpoint.pth
-```
+## License
 
-安装脚本固定 AniXplore 源码提交并为权重生成 SHA-256 sidecar；运行时会校验摘要。默认将分数 `<= 0.35` 解释为倾向真实、`>= 0.65` 解释为倾向生成，中间区间保持不确定。阈值是保守默认值，仍应通过业务验证集校准。
-
-扩散重建复核器：
-
-```powershell
-.\scripts\setup-aeroblade.ps1
-```
-
-两项能力均只把源码、依赖、权重和模型缓存写入项目的 `.runtime` 或项目 Python 环境。扩散重建距离不是 AIGC 概率；未使用验证集配置 `AEROBLADE_DISTANCE_THRESHOLD` 时只展示为辅助证据，不参与方向性投票。
-
-## 后续计划
-
-- 扩展 Agent Evaluation 场景集，加入工具超时、消息重复投递、提示注入与 Checkpoint 恢复测试
-- 使用动漫/漫画业务验证集校准 AniXplore 决策区间，并为数字绘画与矢量卡通接入跨域专用模型
-- 接入局部篡改定位并输出定位掩码
-- 增加检测记录归档与一键重新分析
-- 生成可导出的结构化真实性分析报告
-- 扩展视频抽帧、关键帧分析和时序一致性检测
-- 获得验证集后校准不同媒体类型和模型版本的判定阈值
+[MIT](LICENSE)

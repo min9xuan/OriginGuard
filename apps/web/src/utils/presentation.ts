@@ -32,6 +32,7 @@ const skillLabels: Record<string, { name: string; description: string }> = {
   extract_image_metadata: { name: '图片元数据提取', description: '读取图片格式、尺寸和可用的元数据信息' },
   compare_perceptual_similarity: { name: '感知相似度分析', description: '在存在多个可比媒体时检查视觉相似程度' },
   detect_aigc_with_aide: { name: '生成内容鉴别', description: '运行多特征生成内容鉴别模型，输出可追溯的 AIGC 检测分数' },
+  localize_image_manipulation: { name: '局部篡改定位', description: '使用 Mesorch 输出像素级掩码、热力图和疑似篡改区域' },
   retrieve_forensic_guidance: { name: '取证知识检索', description: '从知识库检索与当前案件相关的调查指引' },
 }
 
@@ -50,6 +51,9 @@ const stepLabels: Record<string, { name: string; description: string }> = {
   MODEL_ROUTING_STARTED: { name: '匹配检测能力', description: '根据媒体类型与模型适用范围选择检测能力' },
   PRIMARY_MODEL_STARTED: { name: '运行主检测模型', description: '匹配的生成内容鉴别能力正在分析原图' },
   PRIMARY_MODEL_COMPLETED: { name: '取得主检测结果', description: '已获得主模型概率、判断与可视化信号' },
+  MANIPULATION_MODEL_STARTED: { name: '运行局部篡改定位', description: 'Mesorch 正在分析像素级异常响应' },
+  MANIPULATION_MODEL_COMPLETED: { name: '取得篡改定位结果', description: '已保存掩码、热力图、叠加图与候选区域' },
+  MANIPULATION_MODEL_UNAVAILABLE: { name: '篡改定位不可用', description: '保留其他取证结果并继续任务' },
   SECONDARY_CHECK_DECIDED: { name: '决定是否追加复核', description: '根据主模型结果判断是否运行扩散重建复核' },
   SECONDARY_MODEL_STARTED: { name: '运行扩散重建复核', description: '独立计算扩散自编码器重建距离' },
   SECONDARY_MODEL_COMPLETED: { name: '取得扩散复核结果', description: '已获得扩散重建距离与校准状态' },
@@ -78,6 +82,7 @@ const evidenceLabels: Record<string, string> = {
   MEDIA_TYPE_CLASSIFICATION: 'CLIP 媒体类型',
   CONTENT_PROVENANCE: 'C2PA 内容来源凭证',
   AIGC_DETECTION: 'AIGC 模型检测',
+  MANIPULATION_LOCALIZATION: 'Mesorch 局部篡改定位',
 }
 
 const conclusionLabels: Record<EvidenceConclusion, string> = {
@@ -123,6 +128,9 @@ const fieldLabels: Record<string, string> = {
   syntheticThreshold: 'AI 生成判定阈值',
   authenticThreshold: '真实图片判定阈值',
   processingMilliseconds: '检测耗时（毫秒）',
+  tamperedProbability: '疑似篡改分数',
+  tamperedAreaRatio: '高响应面积占比',
+  calibrated: '阈值已校准',
   mediaType: '媒体类型代码',
   mediaTypeLabel: '媒体类型',
   mediaTypeScore: '类型相对匹配度',

@@ -30,4 +30,21 @@ public class AgentExecutionEventRecorder {
                 input,
                 output);
     }
+
+    public void recordManipulation(
+            AgentExecutionContext context,
+            UUID taskId,
+            String stepType,
+            Map<String, ?> input,
+            Map<String, ?> output) {
+        repository.appendStep(
+                context.actor().tenantId(),
+                taskId,
+                stepType,
+                "SUCCEEDED",
+                SkillRegistry.MANIPULATION_LOCALIZATION_SKILL,
+                ManipulationLocalizationTool.CODE,
+                input,
+                output);
+    }
 }

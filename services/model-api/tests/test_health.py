@@ -21,6 +21,11 @@ from originguard_model_api.main import (
     get_clip_detector,
     get_diffusion_verifier,
     get_embedding_service,
+    get_manipulation_locator,
+)
+from originguard_model_api.manipulation_locator import (
+    ManipulationLocalization,
+    ManipulationRegion,
 )
 
 
@@ -156,6 +161,46 @@ class FakeDiffusionVerifier:
         )
 
 
+class FakeManipulationLocator:
+    loaded = True
+    configured = True
+    device_name = "cpu"
+
+    def locate(self, content: bytes) -> ManipulationLocalization:
+        return ManipulationLocalization(
+            provider="MESORCH",
+            model="Mesorch image manipulation localization",
+            modelVersion="test",
+            checkpointSha256="c" * 64,
+            device="cpu",
+            status="SUCCEEDED",
+            classification="SUSPICIOUS_MANIPULATION",
+            tamperedProbability=0.88,
+            threshold=0.5,
+            calibrated=False,
+            tamperedAreaRatio=0.12,
+            width=64,
+            height=64,
+            processingMilliseconds=31,
+            maskMethod="MESORCH_PIXEL_PROBABILITY_THRESHOLD",
+            maskPngBase64="bWFzaw==",
+            heatmapPngBase64="aGVhdG1hcA==",
+            overlayPngBase64="b3ZlcmxheQ==",
+            regions=[
+                ManipulationRegion(
+                    x=4,
+                    y=5,
+                    width=16,
+                    height=18,
+                    areaRatio=0.07,
+                    meanProbability=0.79,
+                    maximumProbability=0.95,
+                )
+            ],
+            limitations=["测试限制"],
+        )
+
+
 def test_health() -> None:
     response = TestClient(app).get("/health")
     assert response.status_code == 200
@@ -186,6 +231,22 @@ def test_aide_detection_contract_without_loading_model() -> None:
     assert response.json()["classification"] == "LIKELY_SYNTHETIC"
     assert response.json()["syntheticProbability"] == 0.91
     assert response.json()["attentionOverlayPngBase64"] == "aGVhdG1hcA=="
+
+
+def test_manipulation_localization_contract_without_loading_model() -> None:
+    app.dependency_overrides[get_manipulation_locator] = lambda: FakeManipulationLocator()
+    try:
+        response = TestClient(app).post(
+            "/v1/forensics/manipulation/localize",
+            content=b"fake-image",
+            headers={"Content-Type": "image/png"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+    assert response.status_code == 200
+    assert response.json()["classification"] == "SUSPICIOUS_MANIPULATION"
+    assert response.json()["tamperedProbability"] == 0.88
+    assert response.json()["regions"][0]["width"] == 16
 
 
 def test_quality_gate_rejects_tiny_image_without_loading_aide() -> None:

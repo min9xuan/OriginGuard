@@ -40,6 +40,10 @@ let disposed = false
 let progressAbort: AbortController | null = null
 const originalUrls = ref<Record<string, string>>({})
 const attentionUrls = ref<Record<string, string>>({})
+const localizationMaskUrls = ref<Record<string, string>>({})
+const localizationHeatmapUrls = ref<Record<string, string>>({})
+const localizationOverlayUrls = ref<Record<string, string>>({})
+const localizationModes = ref<Record<string, 'overlay' | 'heatmap' | 'mask'>>({})
 const visualizationLoading = ref<Record<string, boolean>>({})
 const verification = reactive({
   finalConclusion: 'LIKELY_SYNTHETIC' as EvidenceConclusion,
@@ -122,7 +126,10 @@ const multiImageAnalysis = computed(() => objectValue(details.value?.task.conclu
 const jointAssetCount = computed(() => Number(multiImageAnalysis.value.assetCount || 1))
 const firstDetailedObservationId = computed(() => {
   const observations = details.value?.observations ?? []
-  return observations.find(item => item.evidenceType === 'AIGC_DETECTION')?.id ?? observations[0]?.id ?? ''
+  return observations.find(item => item.evidenceType === 'MANIPULATION_LOCALIZATION')?.id
+    ?? observations.find(item => item.evidenceType === 'AIGC_DETECTION')?.id
+    ?? observations[0]?.id
+    ?? ''
 })
 const perAssetResults = computed(() => Array.isArray(multiImageAnalysis.value.perAsset)
   ? multiImageAnalysis.value.perAsset.map(objectValue) : [])
@@ -142,6 +149,7 @@ const mediaObservationGroups = computed(() => {
 const activeMediaGroup = computed(() => mediaObservationGroups.value.find(group => group.assetId === activeAssetId.value)
   ?? mediaObservationGroups.value[0])
 const activeAigcObservation = computed(() => activeMediaGroup.value?.observations.find(item => item.evidenceType === 'AIGC_DETECTION'))
+const activeLocalizationObservation = computed(() => activeMediaGroup.value?.observations.find(item => item.evidenceType === 'MANIPULATION_LOCALIZATION'))
 const activeMediaTypeObservation = computed(() => activeMediaGroup.value?.observations.find(item => item.evidenceType === 'MEDIA_TYPE_CLASSIFICATION'))
 const activeProvenanceObservation = computed(() => activeMediaGroup.value?.observations.find(item => item.evidenceType === 'CONTENT_PROVENANCE'))
 const activeIntegrityObservation = computed(() => activeMediaGroup.value?.observations.find(item => item.evidenceType === 'FILE_INTEGRITY'))
@@ -222,7 +230,7 @@ async function load() {
   try {
     const taskDetails = await agentApi.get(taskId, auth.accessToken)
     details.value = taskDetails
-    await loadAigcVisualizations(taskDetails)
+    await loadForensicVisualizations(taskDetails)
     await loadCaseContext(taskDetails.task.caseId)
   } catch (error) {
     showError(error)
@@ -272,7 +280,7 @@ async function followExistingRun() {
   } finally {
     if (!disposed) await refreshProgress().catch(() => undefined)
     if (details.value) {
-      await loadAigcVisualizations(details.value)
+      await loadForensicVisualizations(details.value)
       await loadCaseContext(details.value.task.caseId)
     }
     mutating.value = false
@@ -426,6 +434,13 @@ function observationOutcomeLabel(observation: AgentObservation) {
   if (observation.evidenceType === 'CONTENT_PROVENANCE') {
     return `C2PA：${provenanceStatusLabel(observation.payload.status)}`
   }
+  if (observation.evidenceType === 'MANIPULATION_LOCALIZATION') {
+    if (observation.payload.status !== 'SUCCEEDED') return '篡改定位不可用'
+    const result = String(observation.payload.classification) === 'SUSPICIOUS_MANIPULATION'
+      ? '发现疑似局部篡改区域'
+      : '未发现高响应篡改区域'
+    return `${result} · 响应分数 ${probabilityLabel(observation.payload.tamperedProbability)}`
+  }
   return '查看观察详情'
 }
 
@@ -453,6 +468,7 @@ function selectAdjacentAsset(offset: number) {
 function isModelExecutionStep(type: string) {
   return [
     'MODEL_ROUTING_STARTED', 'PRIMARY_MODEL_STARTED', 'PRIMARY_MODEL_COMPLETED',
+    'MANIPULATION_MODEL_STARTED', 'MANIPULATION_MODEL_COMPLETED', 'MANIPULATION_MODEL_UNAVAILABLE',
     'CROSS_DOMAIN_MODEL_STARTED', 'CROSS_DOMAIN_MODEL_COMPLETED', 'CROSS_DOMAIN_MODEL_UNAVAILABLE',
     'SECONDARY_CHECK_DECIDED', 'SECONDARY_MODEL_STARTED', 'SECONDARY_MODEL_COMPLETED',
     'SECONDARY_MODEL_UNAVAILABLE', 'EVIDENCE_FUSION_STARTED', 'EVIDENCE_FUSED',
@@ -466,6 +482,7 @@ function stepMetricItems(step: AgentStep) {
   if (output.capabilityName) items.push({ label: '能力', value: String(output.capabilityName) })
   if (typeof output.syntheticProbability === 'number') items.push({ label: 'AI 生成概率', value: probabilityLabel(output.syntheticProbability) })
   if (typeof output.reconstructionDistance === 'number') items.push({ label: '重建距离', value: Number(output.reconstructionDistance).toFixed(4) })
+  if (typeof output.succeededImageCount === 'number') items.push({ label: '定位完成', value: `${output.succeededImageCount} 张` })
   if (output.verdict) items.push({ label: '融合方向', value: verdictLabel(String(output.verdict)) })
   if (output.confidence) items.push({ label: '置信度', value: confidenceLabel(output.confidence) })
   return items
@@ -474,24 +491,64 @@ function stepMetricItems(step: AgentStep) {
 function releaseVisualizations() {
   Object.values(originalUrls.value).forEach((url) => URL.revokeObjectURL(url))
   Object.values(attentionUrls.value).forEach((url) => URL.revokeObjectURL(url))
+  Object.values(localizationMaskUrls.value).forEach((url) => URL.revokeObjectURL(url))
+  Object.values(localizationHeatmapUrls.value).forEach((url) => URL.revokeObjectURL(url))
+  Object.values(localizationOverlayUrls.value).forEach((url) => URL.revokeObjectURL(url))
   originalUrls.value = {}
   attentionUrls.value = {}
+  localizationMaskUrls.value = {}
+  localizationHeatmapUrls.value = {}
+  localizationOverlayUrls.value = {}
 }
 
-async function loadAigcVisualizations(taskDetails: AgentTaskDetails) {
+function localizationMode(observationId: string) {
+  return localizationModes.value[observationId] || 'overlay'
+}
+
+function setLocalizationMode(observationId: string, mode: 'overlay' | 'heatmap' | 'mask') {
+  localizationModes.value = { ...localizationModes.value, [observationId]: mode }
+}
+
+function localizationUrl(observationId: string) {
+  const mode = localizationMode(observationId)
+  if (mode === 'mask') return localizationMaskUrls.value[observationId]
+  if (mode === 'heatmap') return localizationHeatmapUrls.value[observationId]
+  return localizationOverlayUrls.value[observationId]
+}
+
+function localizationCaption(observationId: string) {
+  return ({ overlay: '疑似篡改叠加图', heatmap: '像素响应热力图', mask: '阈值化定位掩码' } as const)[localizationMode(observationId)]
+}
+
+async function loadForensicVisualizations(taskDetails: AgentTaskDetails) {
   releaseVisualizations()
-  const observations = taskDetails.observations.filter((item) => item.evidenceType === 'AIGC_DETECTION')
+  const observations = taskDetails.observations.filter((item) =>
+    ['AIGC_DETECTION', 'MANIPULATION_LOCALIZATION'].includes(item.evidenceType),
+  )
   await Promise.all(observations.map(async (observation) => {
-    const artifact = objectValue(observation.payload.attentionArtifact)
-    const artifactId = String(artifact.artifactId || '')
     if (!observation.assetId) return
     visualizationLoading.value = { ...visualizationLoading.value, [observation.id]: true }
     try {
       const original = await mediaApi.content(observation.assetId, auth.accessToken)
       originalUrls.value = { ...originalUrls.value, [observation.id]: URL.createObjectURL(original) }
-      if (artifactId) {
-        const attention = await agentApi.artifact(taskDetails.task.id, observation.id, artifactId, auth.accessToken)
-        attentionUrls.value = { ...attentionUrls.value, [observation.id]: URL.createObjectURL(attention) }
+      if (observation.evidenceType === 'AIGC_DETECTION') {
+        const artifactId = String(objectValue(observation.payload.attentionArtifact).artifactId || '')
+        if (artifactId) {
+          const attention = await agentApi.artifact(taskDetails.task.id, observation.id, artifactId, auth.accessToken)
+          attentionUrls.value = { ...attentionUrls.value, [observation.id]: URL.createObjectURL(attention) }
+        }
+      } else {
+        const artifactTargets = [
+          ['maskArtifact', localizationMaskUrls],
+          ['heatmapArtifact', localizationHeatmapUrls],
+          ['overlayArtifact', localizationOverlayUrls],
+        ] as const
+        await Promise.all(artifactTargets.map(async ([field, target]) => {
+          const artifactId = String(objectValue(observation.payload[field]).artifactId || '')
+          if (!artifactId) return
+          const content = await agentApi.artifact(taskDetails.task.id, observation.id, artifactId, auth.accessToken)
+          target.value = { ...target.value, [observation.id]: URL.createObjectURL(content) }
+        }))
       }
     } catch {
       // The textual result remains usable when an artifact cannot be loaded.
@@ -882,21 +939,39 @@ onBeforeUnmount(() => {
               </button>
             </div>
 
-            <div v-if="activeAigcObservation" class="active-media-analysis">
-              <section class="active-media-visuals" aria-label="当前图片与模型可视化">
+            <div v-if="activeAigcObservation || activeLocalizationObservation" class="active-media-analysis">
+              <section class="active-media-visuals" aria-label="当前图片与篡改定位可视化">
                 <figure>
-                  <img v-if="originalUrls[activeAigcObservation.id]" :src="originalUrls[activeAigcObservation.id]" alt="当前接受分析的原始媒体" />
+                  <img
+                    v-if="originalUrls[(activeLocalizationObservation || activeAigcObservation)!.id]"
+                    :src="originalUrls[(activeLocalizationObservation || activeAigcObservation)!.id]"
+                    alt="当前接受分析的原始媒体"
+                  />
                   <div v-else class="visual-placeholder">原图暂不可用</div>
                   <figcaption>原始图片</figcaption>
                 </figure>
-                <figure class="analysis-visual">
-                  <img v-if="attentionUrls[activeAigcObservation.id]" :src="attentionUrls[activeAigcObservation.id]" alt="当前图片的生成内容模型可视化" />
+                <figure v-if="activeLocalizationObservation" class="analysis-visual localization-figure">
+                  <div class="visual-mode-switch" aria-label="切换篡改定位图层">
+                    <button
+                      v-for="mode in [{ key: 'overlay', label: '叠加图' }, { key: 'heatmap', label: '热力图' }, { key: 'mask', label: '掩码' }]"
+                      :key="mode.key"
+                      type="button"
+                      :class="{ active: localizationMode(activeLocalizationObservation.id) === mode.key }"
+                      @click="setLocalizationMode(activeLocalizationObservation.id, mode.key as 'overlay' | 'heatmap' | 'mask')"
+                    >{{ mode.label }}</button>
+                  </div>
+                  <img v-if="localizationUrl(activeLocalizationObservation.id)" :src="localizationUrl(activeLocalizationObservation.id)" alt="当前图片的疑似篡改定位结果" />
+                  <div v-else class="visual-placeholder">{{ activeLocalizationObservation.payload.status === 'SUCCEEDED' ? '定位图暂不可用' : 'Mesorch 当前未配置或执行失败' }}</div>
+                  <figcaption>{{ localizationCaption(activeLocalizationObservation.id) }}（像素响应仅供人工核验）</figcaption>
+                </figure>
+                <figure v-else class="analysis-visual">
+                  <img v-if="activeAigcObservation && attentionUrls[activeAigcObservation.id]" :src="attentionUrls[activeAigcObservation.id]" alt="当前图片的生成内容模型可视化" />
                   <div v-else class="visual-placeholder">当前模型没有生成区域可视化</div>
-                  <figcaption>{{ isLocalizationResult(activeAigcObservation) ? '疑似 AI 生成区域' : '模型关注区域（不等同于精确生成位置）' }}</figcaption>
+                  <figcaption>模型关注区域（不等同于精确生成位置）</figcaption>
                 </figure>
               </section>
 
-              <aside class="active-media-summary">
+              <aside v-if="activeAigcObservation" class="active-media-summary">
                 <span>当前图片初步判断</span>
                 <strong>{{ verdictLabel(String(fusionFor(activeAigcObservation).verdict || activeAigcObservation.payload.classification || 'INCONCLUSIVE')) }}</strong>
                 <div class="active-probability">
@@ -909,11 +984,22 @@ onBeforeUnmount(() => {
                   <div><dt>模型置信度</dt><dd>{{ confidenceLabel(fusionFor(activeAigcObservation).confidence) }}</dd></div>
                   <div><dt>跨域交叉复核</dt><dd>{{ crossDomainLabel(activeAigcObservation) }}</dd></div>
                   <div><dt>C2PA 溯源</dt><dd>{{ activeProvenanceObservation ? provenanceStatusLabel(activeProvenanceObservation.payload.status) : '未执行' }}</dd></div>
+                  <div v-if="activeLocalizationObservation"><dt>局部篡改响应</dt><dd>{{ observationOutcomeLabel(activeLocalizationObservation) }}</dd></div>
+                </dl>
+              </aside>
+              <aside v-else-if="activeLocalizationObservation" class="active-media-summary">
+                <span>局部篡改定位</span>
+                <strong>{{ observationOutcomeLabel(activeLocalizationObservation) }}</strong>
+                <p>{{ activeLocalizationObservation.summary }}</p>
+                <dl>
+                  <div><dt>高响应面积</dt><dd>{{ probabilityLabel(activeLocalizationObservation.payload.tamperedAreaRatio) }}</dd></div>
+                  <div><dt>候选区域</dt><dd>{{ Array.isArray(activeLocalizationObservation.payload.regions) ? activeLocalizationObservation.payload.regions.length : 0 }} 个</dd></div>
+                  <div><dt>阈值校准</dt><dd>{{ activeLocalizationObservation.payload.calibrated ? '已校准' : '尚未校准' }}</dd></div>
                 </dl>
               </aside>
             </div>
 
-            <div v-else class="active-media-missing">当前图片尚未取得 AIGC 主检测结果，可查看下方辅助观察。</div>
+            <div v-else class="active-media-missing">当前图片尚未取得模型检测或篡改定位结果，可查看下方辅助观察。</div>
 
             <section class="active-supporting-evidence">
               <article v-if="activeMediaTypeObservation">
@@ -1085,6 +1171,49 @@ onBeforeUnmount(() => {
                 </div>
               </div>
             </template>
+            <section v-else-if="item.evidenceType === 'MANIPULATION_LOCALIZATION'" class="localization-result">
+              <header>
+                <div>
+                  <span>像素级局部篡改定位</span>
+                  <strong>{{ observationOutcomeLabel(item) }}</strong>
+                </div>
+                <span :class="['localization-status', String(item.payload.status).toLowerCase()]">
+                  {{ item.payload.status === 'SUCCEEDED' ? '定位完成' : '能力不可用' }}
+                </span>
+              </header>
+              <div class="localization-metrics">
+                <div><span>疑似篡改响应</span><strong>{{ probabilityLabel(item.payload.tamperedProbability) }}</strong></div>
+                <div><span>高响应面积</span><strong>{{ probabilityLabel(item.payload.tamperedAreaRatio) }}</strong></div>
+                <div><span>候选区域</span><strong>{{ Array.isArray(item.payload.regions) ? item.payload.regions.length : 0 }} 个</strong></div>
+                <div><span>阈值状态</span><strong>{{ item.payload.calibrated ? '已校准' : '未校准' }}</strong></div>
+              </div>
+              <div class="localization-viewport" v-loading="visualizationLoading[item.id]">
+                <figure>
+                  <img v-if="originalUrls[item.id]" :src="originalUrls[item.id]" alt="接受篡改定位分析的原始媒体" />
+                  <div v-else class="visual-placeholder">原图暂不可用</div>
+                  <figcaption>原始媒体</figcaption>
+                </figure>
+                <figure class="localization-figure">
+                  <div class="visual-mode-switch" aria-label="切换篡改定位图层">
+                    <button
+                      v-for="mode in [{ key: 'overlay', label: '叠加图' }, { key: 'heatmap', label: '热力图' }, { key: 'mask', label: '掩码' }]"
+                      :key="mode.key"
+                      type="button"
+                      :class="{ active: localizationMode(item.id) === mode.key }"
+                      @click="setLocalizationMode(item.id, mode.key as 'overlay' | 'heatmap' | 'mask')"
+                    >{{ mode.label }}</button>
+                  </div>
+                  <img v-if="localizationUrl(item.id)" :src="localizationUrl(item.id)" alt="疑似篡改区域定位结果" />
+                  <div v-else class="visual-placeholder">{{ item.payload.status === 'SUCCEEDED' ? '定位图暂不可用' : 'Mesorch 当前未配置或执行失败' }}</div>
+                  <figcaption>{{ localizationCaption(item.id) }}</figcaption>
+                </figure>
+              </div>
+              <p class="attention-notice">掩码与热力图表示模型响应，不代表已经证明发生篡改；压缩、缩放和复杂纹理可能造成误报。</p>
+              <div v-if="textItems(item.payload.limitations).length" class="quality-issues">
+                <strong>能力边界</strong>
+                <ul><li v-for="limitation in textItems(item.payload.limitations)" :key="limitation">{{ limitation }}</li></ul>
+              </div>
+            </section>
             <section v-else-if="item.evidenceType === 'CONTENT_PROVENANCE'" class="provenance-card" :data-status="item.payload.status">
               <div>
                 <span>C2PA 校验状态</span>

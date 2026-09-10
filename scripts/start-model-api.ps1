@@ -7,6 +7,8 @@ $modelPath = Join-Path $runtimeRoot 'models\bge-small-zh-v1.5'
 $aideSourcePath = Join-Path $runtimeRoot 'vendor\AIDE'
 $aideCheckpointPath = Join-Path $runtimeRoot 'models\aide\GenImage_train.pth'
 $clipModelPath = Join-Path $runtimeRoot 'models\clip\ViT-B-32.pt'
+$mesorchSourcePath = Join-Path $runtimeRoot 'vendor-src\Mesorch'
+$mesorchCheckpointPath = Join-Path $runtimeRoot 'models\mesorch\mesorch-98.pth'
 
 if (-not (Test-Path -LiteralPath $python)) {
     throw "Project Python environment is missing: $python"
@@ -31,6 +33,9 @@ $env:AIDE_DEVICE = if ($env:AIDE_DEVICE) { $env:AIDE_DEVICE } else { 'cpu' }
 $env:AIDE_PRECISION = if ($env:AIDE_PRECISION) { $env:AIDE_PRECISION } else { 'auto' }
 $env:CLIP_MODEL_PATH = $clipModelPath
 $env:CLIP_DEVICE = if ($env:CLIP_DEVICE) { $env:CLIP_DEVICE } else { 'cpu' }
+$env:MESORCH_SOURCE_PATH = if ($env:MESORCH_SOURCE_PATH) { $env:MESORCH_SOURCE_PATH } else { $mesorchSourcePath }
+$env:MESORCH_CHECKPOINT_PATH = if ($env:MESORCH_CHECKPOINT_PATH) { $env:MESORCH_CHECKPOINT_PATH } else { $mesorchCheckpointPath }
+$env:MESORCH_DEVICE = if ($env:MESORCH_DEVICE) { $env:MESORCH_DEVICE } else { 'auto' }
 $env:HF_HOME = Join-Path $runtimeRoot 'cache\huggingface'
 $env:TORCH_HOME = Join-Path $runtimeRoot 'cache\torch'
 $env:TEMP = Join-Path $runtimeRoot 'cache\tmp'

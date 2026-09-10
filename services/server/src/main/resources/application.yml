@@ -97,6 +97,10 @@ originguard:
       provider: ${AIGC_DETECTOR_PROVIDER:model-api}
       base-url: ${MODEL_API_BASE_URL:http://127.0.0.1:8090}
       timeout: ${AIGC_DETECTOR_TIMEOUT:PT10M}
+    manipulation-localizer:
+      provider: ${MANIPULATION_LOCALIZER_PROVIDER:model-api}
+      base-url: ${MODEL_API_BASE_URL:http://127.0.0.1:8090}
+      timeout: ${MESORCH_TIMEOUT:PT10M}
     illustration-detector:
       enabled: ${ANIXPLORE_ENABLED:false}
       base-url: ${MODEL_API_BASE_URL:http://127.0.0.1:8090}

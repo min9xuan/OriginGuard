@@ -129,13 +129,17 @@ public class AgentTaskService {
         AgentObservation observation = repository.findObservation(actor.tenantId(), taskId, observationId)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "AGENT_OBSERVATION_NOT_FOUND", "Agent observation was not found"));
-        if (observation.assetId() == null || !"AIGC_DETECTION".equals(observation.evidenceType())) {
+        if (observation.assetId() == null || !("AIGC_DETECTION".equals(observation.evidenceType())
+                || "MANIPULATION_LOCALIZATION".equals(observation.evidenceType()))) {
             throw new ResourceNotFoundException(
                     "AGENT_ARTIFACT_NOT_FOUND", "Agent visualization was not found");
         }
-        Object artifactValue = observation.payload().get("attentionArtifact");
-        if (!(artifactValue instanceof Map<?, ?> artifact)
-                || !artifactId.toString().equals(String.valueOf(artifact.get("artifactId")))) {
+        Map<?, ?> artifact = observation.payload().values().stream()
+                .filter(Map.class::isInstance)
+                .map(Map.class::cast)
+                .filter(value -> artifactId.toString().equals(String.valueOf(value.get("artifactId"))))
+                .findFirst().orElse(null);
+        if (artifact == null) {
             throw new ResourceNotFoundException(
                     "AGENT_ARTIFACT_NOT_FOUND", "Agent visualization was not found");
         }
@@ -187,6 +191,7 @@ public class AgentTaskService {
             List<String> observationIds = new ArrayList<>();
             List<String> knowledgeRetrievalIds = new ArrayList<>();
             Map<String, Object> aigcDetection = Map.of();
+            Map<String, Object> manipulationLocalization = Map.of();
             Map<String, Object> retrievalEvidence = Map.of();
             Map<String, Object> integrityAnalysis = Map.of();
             Map<String, Object> similarityAnalysis = Map.of();
@@ -336,6 +341,9 @@ public class AgentTaskService {
                 if (SkillRegistry.AIGC_DETECTION_SKILL.equals(skill.code())) {
                     aigcDetection = toolOutput;
                 }
+                if (SkillRegistry.MANIPULATION_LOCALIZATION_SKILL.equals(skill.code())) {
+                    manipulationLocalization = toolOutput;
+                }
                 if (SkillRegistry.INTEGRITY_SKILL.equals(skill.code())) integrityAnalysis = toolOutput;
                 if (SkillRegistry.SIMILARITY_SKILL.equals(skill.code())) similarityAnalysis = toolOutput;
                 repository.appendStep(
@@ -378,13 +386,14 @@ public class AgentTaskService {
                                     "provider", toolOutput.getOrDefault("webProvider", "UNKNOWN"),
                                     "sourceCount", numberValue(toolOutput.get("webSourceCount")),
                                     "status", toolOutput.getOrDefault("webSearchStatus", "UNKNOWN")));
-                } else if (SkillRegistry.AIGC_DETECTION_SKILL.equals(skill.code())) {
-                    List<Map<String, Object>> findings = findings(toolOutput, "AIGC detection model");
+                } else if (SkillRegistry.AIGC_DETECTION_SKILL.equals(skill.code())
+                        || SkillRegistry.MANIPULATION_LOCALIZATION_SKILL.equals(skill.code())) {
+                    List<Map<String, Object>> findings = findings(toolOutput, skill.description());
                     for (Map<String, Object> finding : findings) {
                         UUID assetId = UUID.fromString(String.valueOf(finding.get("assetId")));
                         AgentObservation observation = repository.insertObservation(
                                 actor.tenantId(), taskId, investigationCase.id(), assetId,
-                                evidenceTypeFor(skill.code()), aigcFindingSummary(finding), finding);
+                                evidenceTypeFor(skill.code()), findingSummary(skill.code(), finding), finding);
                         observationIds.add(observation.id().toString());
                         latestObservations.add(new AgentPlanner.ObservationDigest(
                                 observation.evidenceType(), observation.summary(),
@@ -549,11 +558,13 @@ public class AgentTaskService {
             remainingBudget = consumeBudget(remainingBudget);
             Map<String, Object> conclusion = new LinkedHashMap<>(conclusionFor(
                     plan, executedSkills, observationIds, knowledgeRetrievalIds, aigcDetection,
-                    retrievalEvidence, integrityAnalysis, similarityAnalysis));
+                    manipulationLocalization, retrievalEvidence, integrityAnalysis, similarityAnalysis));
             conclusion.put("executionMode", "PLAN_ACT_OBSERVE_REPLAN_STOP");
             conclusion.put("replanCount", replanCount);
             long executionDurationMillis = (System.nanoTime() - executionStartedNanos) / 1_000_000L;
-            int cacheHits = cacheHitCount(enrichedContext.mediaTypeContexts()) + cacheHitCount(aigcDetection);
+            int cacheHits = cacheHitCount(enrichedContext.mediaTypeContexts())
+                    + cacheHitCount(aigcDetection)
+                    + cacheHitCount(manipulationLocalization);
             conclusion.put("performance", Map.of(
                     "queueWaitMillis", queueWaitMillis,
                     "executionDurationMillis", executionDurationMillis,
@@ -677,6 +688,7 @@ public class AgentTaskService {
             case SkillRegistry.SIMILARITY_SKILL -> "PERCEPTUAL_SIMILARITY";
             case SkillRegistry.MEDIA_TYPE_SKILL -> "MEDIA_TYPE_CLASSIFICATION";
             case SkillRegistry.AIGC_DETECTION_SKILL -> "AIGC_DETECTION";
+            case SkillRegistry.MANIPULATION_LOCALIZATION_SKILL -> "MANIPULATION_LOCALIZATION";
             default -> throw new IllegalArgumentException("No evidence type for skill: " + skillCode);
         };
     }
@@ -694,6 +706,10 @@ public class AgentTaskService {
                     + " 个图片，最高 AI 生成概率为 "
                     + percent(toolOutput.get("maximumSyntheticProbability"))
                     + "；该结果是候选模型证据，仍需人工复核。";
+            case SkillRegistry.MANIPULATION_LOCALIZATION_SKILL -> "Mesorch 已对 "
+                    + toolOutput.getOrDefault("analyzedImageCount", 0)
+                    + " 个图片执行局部篡改定位，其中 "
+                    + toolOutput.getOrDefault("succeededImageCount", 0) + " 个取得定位结果。";
             default -> throw new IllegalArgumentException("No summary for skill: " + skillCode);
         };
     }
@@ -728,6 +744,25 @@ public class AgentTaskService {
                 + "；该结果用于规划检测策略，不直接判断是否由 AI 生成。";
     }
 
+    private String findingSummary(String skillCode, Map<String, Object> finding) {
+        return SkillRegistry.MANIPULATION_LOCALIZATION_SKILL.equals(skillCode)
+                ? manipulationFindingSummary(finding)
+                : aigcFindingSummary(finding);
+    }
+
+    private String manipulationFindingSummary(Map<String, Object> finding) {
+        String filename = String.valueOf(finding.getOrDefault("filename", "当前图片"));
+        if (!"SUCCEEDED".equals(finding.get("status"))) {
+            return "“" + filename + "”未取得 Mesorch 篡改定位结果；已记录能力不可用状态，不据此判断。";
+        }
+        String classification = String.valueOf(finding.getOrDefault("classification", "INCONCLUSIVE"));
+        String direction = "SUSPICIOUS_MANIPULATION".equals(classification)
+                ? "发现疑似局部内容变化" : "未发现超过当前阈值的局部内容变化";
+        return "Mesorch 已分析“" + filename + "”，" + direction + "；疑似篡改分数为 "
+                + percent(finding.get("tamperedProbability")) + "，高响应区域约占 "
+                + percent(finding.get("tamperedAreaRatio")) + "。当前阈值尚未校准，仍需人工核验。";
+    }
+
     private String aigcFindingSummary(Map<String, Object> finding) {
         Map<String, Object> routing = objectMap(finding.get("modelRouting"));
         String routingNote = Boolean.TRUE.equals(routing.get("degraded"))
@@ -760,6 +795,7 @@ public class AgentTaskService {
             List<String> observationIds,
             List<String> knowledgeRetrievalIds,
             Map<String, Object> aigcDetection,
+            Map<String, Object> manipulationLocalization,
             Map<String, Object> retrievalEvidence,
             Map<String, Object> integrityAnalysis,
             Map<String, Object> similarityAnalysis) {
@@ -778,7 +814,11 @@ public class AgentTaskService {
         limitations.add("当前使用生成内容鉴别模型的 0.5 实验边界形成初步判断，尚未经过 OriginGuard 业务验证集校准");
         limitations.add("CLIP 只负责媒体类型与模型路由，不作为 AIGC 真伪证据");
         limitations.add("C2PA 只验证凭证、文件绑定和声明的编辑历史，不能单独证明画面真实或由 AI 生成");
-        limitations.add("尚未配置篡改区域定位模型");
+        if (numberValue(manipulationLocalization.get("succeededImageCount")) == 0) {
+            limitations.add("Mesorch 篡改定位当前未配置或不可用，本次没有形成像素级定位结论");
+        } else {
+            limitations.add("Mesorch 篡改定位阈值尚未使用 OriginGuard 业务验证集校准");
+        }
         limitations.add(plannerLimitation(plan.provider()));
         Map<String, Object> conclusion = new LinkedHashMap<>();
         conclusion.put("verdict", verdict);
@@ -796,6 +836,12 @@ public class AgentTaskService {
         if (aigcDetection.get("maximumSyntheticProbability") != null) {
             conclusion.put("primaryModelSyntheticProbability", aigcDetection.get("maximumSyntheticProbability"));
         }
+        conclusion.put("manipulationLocalization", Map.of(
+                "provider", manipulationLocalization.getOrDefault("provider", "NOT_EXECUTED"),
+                "analyzedImageCount", manipulationLocalization.getOrDefault("analyzedImageCount", 0),
+                "succeededImageCount", manipulationLocalization.getOrDefault("succeededImageCount", 0),
+                "status", numberValue(manipulationLocalization.get("succeededImageCount")) > 0
+                        ? "COMPLETED" : "UNAVAILABLE"));
         conclusion.put("planner", plan.provider());
         conclusion.put("plannerSummary", plan.summary());
         conclusion.put("executedSkills", List.copyOf(executedSkills));
@@ -810,7 +856,8 @@ public class AgentTaskService {
         conclusion.put("webSourceCount", retrievalEvidence.getOrDefault("webSourceCount", 0));
         Map<String, Object> provenance = provenanceSummary(integrityAnalysis);
         conclusion.put("provenanceSummary", provenance);
-        conclusion.put("multiImageAnalysis", multiImageAnalysis(aigcDetection, similarityAnalysis, integrityAnalysis));
+        conclusion.put("multiImageAnalysis", multiImageAnalysis(
+                aigcDetection, manipulationLocalization, similarityAnalysis, integrityAnalysis));
         conclusion.put("limitations", List.copyOf(limitations));
         return Map.copyOf(conclusion);
     }
@@ -836,9 +883,15 @@ public class AgentTaskService {
 
     private Map<String, Object> multiImageAnalysis(
             Map<String, Object> aigcDetection,
+            Map<String, Object> manipulationLocalization,
             Map<String, Object> similarityAnalysis,
             Map<String, Object> integrityAnalysis) {
         List<Map<String, Object>> detections = optionalFindings(aigcDetection);
+        List<Map<String, Object>> localizations = optionalFindings(manipulationLocalization);
+        Map<String, Map<String, Object>> localizationByAsset = new LinkedHashMap<>();
+        for (Map<String, Object> finding : localizations) {
+            localizationByAsset.put(String.valueOf(finding.get("assetId")), finding);
+        }
         Map<String, Map<String, Object>> provenanceByAsset = new LinkedHashMap<>();
         for (Map<String, Object> finding : optionalFindings(integrityAnalysis)) {
             provenanceByAsset.put(String.valueOf(finding.get("assetId")), objectMap(finding.get("provenance")));
@@ -854,6 +907,19 @@ public class AgentTaskService {
             item.put("filename", detection.getOrDefault("filename", assetId));
             item.put("classification", verdict);
             item.put("syntheticProbability", detection.getOrDefault("syntheticProbability", 0));
+            addManipulationSummary(item, localizationByAsset.get(assetId));
+            item.put("provenanceStatus", provenanceByAsset.getOrDefault(assetId, Map.of())
+                    .getOrDefault("status", "UNAVAILABLE"));
+            perAsset.add(Map.copyOf(item));
+        }
+        for (Map<String, Object> localization : localizations) {
+            String assetId = String.valueOf(localization.getOrDefault("assetId", ""));
+            if (detections.stream().anyMatch(item -> assetId.equals(String.valueOf(item.get("assetId"))))) continue;
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("assetId", assetId);
+            item.put("filename", localization.getOrDefault("filename", assetId));
+            item.put("classification", "INCONCLUSIVE");
+            addManipulationSummary(item, localization);
             item.put("provenanceStatus", provenanceByAsset.getOrDefault(assetId, Map.of())
                     .getOrDefault("status", "UNAVAILABLE"));
             perAsset.add(Map.copyOf(item));
@@ -870,7 +936,8 @@ public class AgentTaskService {
                 }
             }
         }
-        int assetCount = Math.max(detections.size(), numberValue(similarityAnalysis.get("assetCount")));
+        int assetCount = Math.max(Math.max(detections.size(), localizations.size()),
+                numberValue(similarityAnalysis.get("assetCount")));
         return Map.of(
                 "assetCount", assetCount,
                 "jointAnalysis", assetCount > 1,
@@ -878,6 +945,17 @@ public class AgentTaskService {
                 "verdictCounts", Map.copyOf(verdictCounts),
                 "relatedPairs", List.copyOf(relatedPairs),
                 "comparisonCount", numberValue(similarityAnalysis.get("comparisonCount")));
+    }
+
+    private void addManipulationSummary(Map<String, Object> target, Map<String, Object> localization) {
+        if (localization == null) {
+            target.put("manipulationStatus", "NOT_EXECUTED");
+            return;
+        }
+        target.put("manipulationStatus", localization.getOrDefault("status", "UNAVAILABLE"));
+        target.put("manipulationClassification", localization.getOrDefault("classification", "INCONCLUSIVE"));
+        target.put("tamperedProbability", localization.getOrDefault("tamperedProbability", 0));
+        target.put("tamperedAreaRatio", localization.getOrDefault("tamperedAreaRatio", 0));
     }
 
     private List<Map<String, Object>> optionalFindings(Map<String, Object> output) {

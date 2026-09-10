@@ -264,8 +264,8 @@ async function startAgent() {
   try {
     const created = await agentApi.create(
       caseId,
-      '先使用 CLIP 识别媒体类型，再由 LLM 规划文件完整性、图片元数据、生成内容鉴别、感知相似度分析和取证知识检索',
-      13,
+      '先使用 CLIP 识别媒体类型，再由 LLM 规划文件完整性、图片元数据、生成内容鉴别、局部篡改定位、感知相似度分析和取证知识检索',
+      15,
       auth.accessToken,
     )
     await router.push({ path: `${routePrefix()}/agent-tasks/${created.task.id}`, query: { autorun: '1' } })
