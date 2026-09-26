@@ -4,6 +4,7 @@ import com.originguard.agent.application.AgentTaskService;
 import com.originguard.agent.application.ForensicModelRegistry;
 import com.originguard.agent.application.AgentProgressService;
 import com.originguard.agent.application.AgentTaskDispatcher;
+import com.originguard.agent.application.AgentDeadLetterService;
 import com.originguard.agent.domain.AgentTask;
 import com.originguard.identity.application.CurrentActorProvider;
 import com.originguard.shared.application.RedisRateLimiter;
@@ -27,6 +28,8 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import org.springframework.beans.factory.ObjectProvider;
@@ -40,16 +43,19 @@ public class AgentTaskController {
     private final ObjectProvider<AgentTaskDispatcher> dispatcher;
     private final RedisRateLimiter rateLimiter;
     private final CurrentActorProvider actorProvider;
+    private final ObjectProvider<AgentDeadLetterService> deadLetters;
 
     public AgentTaskController(AgentTaskService service, ForensicModelRegistry modelRegistry,
             AgentProgressService progressService, ObjectProvider<AgentTaskDispatcher> dispatcher,
-            RedisRateLimiter rateLimiter, CurrentActorProvider actorProvider) {
+            RedisRateLimiter rateLimiter, CurrentActorProvider actorProvider,
+            ObjectProvider<AgentDeadLetterService> deadLetters) {
         this.service = service;
         this.modelRegistry = modelRegistry;
         this.progressService = progressService;
         this.dispatcher = dispatcher;
         this.rateLimiter = rateLimiter;
         this.actorProvider = actorProvider;
+        this.deadLetters = deadLetters;
     }
 
     @PostMapping
@@ -81,9 +87,14 @@ public class AgentTaskController {
 
     @GetMapping(value = "/{taskId}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     @PreAuthorize("hasAuthority('agent:trace:read')")
-    public SseEmitter events(@PathVariable UUID taskId) {
+    public SseEmitter events(
+            @PathVariable UUID taskId,
+            @RequestHeader(value = "Last-Event-ID", required = false) String lastEventIdHeader,
+            @RequestParam(value = "lastEventId", required = false, defaultValue = "0") long lastEventId) {
         service.get(taskId);
-        return progressService.subscribe(taskId);
+        long cursor = lastEventIdHeader == null || lastEventIdHeader.isBlank()
+                ? lastEventId : Long.parseLong(lastEventIdHeader);
+        return progressService.subscribe(taskId, cursor);
     }
 
     @DeleteMapping("/{taskId}")
@@ -125,6 +136,15 @@ public class AgentTaskController {
     public AgentTaskService.AgentTaskDetails cancel(
             @PathVariable UUID taskId, @Valid @RequestBody VersionRequest request) {
         return service.cancel(taskId, request.version());
+    }
+
+    @PostMapping("/dead-letters/replay")
+    @PreAuthorize("hasAuthority('model:manage')")
+    public Map<String, Object> replayDeadLetters(
+            @RequestParam(value = "limit", defaultValue = "10") @Min(1) @Max(100) int limit) {
+        AgentDeadLetterService service = deadLetters.getIfAvailable();
+        if (service == null) return Map.of("enabled", false, "replayed", 0);
+        return Map.of("enabled", true, "replayed", service.replay(limit));
     }
 
     public record CreateAgentTaskRequest(

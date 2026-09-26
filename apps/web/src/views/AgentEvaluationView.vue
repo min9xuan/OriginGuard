@@ -5,19 +5,24 @@ import { agentEvaluationApi } from '../api/agent-evaluations'
 import { agentApi } from '../api/agents'
 import { ApiRequestError } from '../api/http'
 import { useAuthStore } from '../stores/auth'
-import type { AgentEvaluationCase, AgentEvaluationRun } from '../types/agent-evaluation'
+import type {
+  AgentEvaluationBaseline, AgentEvaluationBatchSummary, AgentEvaluationCase, AgentEvaluationRun,
+} from '../types/agent-evaluation'
 import type { AgentTask } from '../types/agent'
 import { formatDate } from '../utils/format'
 
 const auth = useAuthStore()
 const cases = ref<AgentEvaluationCase[]>([])
+const baselines = ref<AgentEvaluationBaseline[]>([])
 const runs = ref<AgentEvaluationRun[]>([])
 const tasks = ref<AgentTask[]>([])
 const loading = ref(false)
 const saving = ref(false)
 const running = ref(false)
+const installing = ref(false)
 const selectedCaseId = ref('')
-const selectedTaskId = ref('')
+const selectedTaskIds = ref<string[]>([])
+const batchSummary = ref<AgentEvaluationBatchSummary | null>(null)
 const form = reactive({
   name: '单图基础取证链路',
   description: '验证主检测任务是否完成必要规划、保留证据边界并在预算内结束。',
@@ -44,16 +49,18 @@ const selectedCase = computed(() => cases.value.find(item => item.id === selecte
 async function load() {
   loading.value = true
   try {
-    const [caseResult, runResult, taskResult] = await Promise.all([
+    const [baselineResult, caseResult, runResult, taskResult] = await Promise.all([
+      agentEvaluationApi.baselines(auth.accessToken),
       agentEvaluationApi.cases(auth.accessToken),
       agentEvaluationApi.runs(auth.accessToken),
       agentApi.list(auth.accessToken),
     ])
+    baselines.value = baselineResult
     cases.value = caseResult
     runs.value = runResult
     tasks.value = taskResult
     if (!selectedCaseId.value && cases.value.length) selectedCaseId.value = cases.value[0].id
-    if (!selectedTaskId.value && terminalTasks.value.length) selectedTaskId.value = terminalTasks.value[0].id
+    if (!selectedTaskIds.value.length && terminalTasks.value.length) selectedTaskIds.value = [terminalTasks.value[0].id]
   } catch (error) { showError(error) } finally { loading.value = false }
 }
 
@@ -95,13 +102,25 @@ async function deleteCase(item: AgentEvaluationCase) {
 }
 
 async function evaluate() {
-  if (!selectedCaseId.value || !selectedTaskId.value) return ElMessage.warning('请选择评测规则和已结束的 Agent 任务')
+  if (!selectedCaseId.value || !selectedTaskIds.value.length) return ElMessage.warning('请选择评测规则和已结束的 Agent 任务')
   running.value = true
   try {
-    const result = await agentEvaluationApi.evaluate(selectedCaseId.value, selectedTaskId.value, auth.accessToken)
-    ElMessage.success(`评测完成：${result.totalScore.toFixed(1)} 分`)
+    batchSummary.value = await agentEvaluationApi.evaluateBatch(
+      selectedCaseId.value, selectedTaskIds.value, auth.accessToken,
+    )
+    ElMessage.success(`批量评测完成：${batchSummary.value.passedTasks}/${batchSummary.value.totalTasks} 通过`)
     await load()
   } catch (error) { showError(error) } finally { running.value = false }
+}
+
+async function installBaselines() {
+  installing.value = true
+  try {
+    const installed = await agentEvaluationApi.installBaselines(auth.accessToken)
+    if (installed.length) selectedCaseId.value = installed[0].id
+    ElMessage.success('内置端到端基线已安装；重复操作不会创建同名规则')
+    await load()
+  } catch (error) { showError(error) } finally { installing.value = false }
 }
 
 function dimensionLabel(value: string) {
@@ -142,20 +161,39 @@ onMounted(load)
     </section>
 
     <section class="panel">
-      <div class="section-heading"><div><h2>运行真实任务评测</h2><p>只读取已经结束的任务，不修改原任务及证据。</p></div></div>
+      <div class="section-heading"><div><h2>端到端基线场景</h2><p>版本化规则覆盖单图、多图、证据忠实度与工具失败恢复，可一键安装到当前租户。</p></div>
+        <el-button v-if="canManage" :loading="installing" @click="installBaselines">安装内置基线</el-button>
+      </div>
+      <div class="evaluation-baseline-grid">
+        <article v-for="item in baselines" :key="item.code">
+          <span>{{ item.code }}</span><strong>{{ item.name.replace('[基线] ', '') }}</strong><p>{{ item.description }}</p>
+          <small>通过线 {{ item.minimumScore }} · {{ item.maxToolCalls }} 次工具 · {{ Math.round(item.maxDurationMilliseconds / 1000) }} 秒</small>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-heading"><div><h2>运行真实任务批量评测</h2><p>以同一规则读取一组终态任务的 Trace、Observation 与 Checkpoint，形成可比较的回归结果。</p></div></div>
       <div class="agent-evaluation-run-form">
         <el-select v-model="selectedCaseId" filterable placeholder="选择评测规则">
           <el-option v-for="item in cases" :key="item.id" :label="item.name" :value="item.id" />
         </el-select>
-        <el-select v-model="selectedTaskId" filterable placeholder="选择已结束的 Agent 任务">
+        <el-select v-model="selectedTaskIds" multiple collapse-tags collapse-tags-tooltip filterable placeholder="选择一个或多个已结束的 Agent 任务">
           <el-option v-for="task in terminalTasks" :key="task.id" :label="taskLabel(task)" :value="task.id" />
         </el-select>
-        <el-button type="primary" :disabled="!selectedCaseId || !selectedTaskId || !canManage" :loading="running" @click="evaluate">执行评测</el-button>
+        <el-button type="primary" :disabled="!selectedCaseId || !selectedTaskIds.length || !canManage" :loading="running" @click="evaluate">批量执行评测</el-button>
       </div>
       <p v-if="selectedCase" class="evaluation-rule-summary">
         上限：{{ selectedCase.maxToolCalls }} 次工具调用、{{ selectedCase.maxReplans }} 次重规划、
         {{ Math.round(selectedCase.maxDurationMilliseconds / 1000) }} 秒；通过线 {{ selectedCase.minimumScore }} 分。
       </p>
+      <div v-if="batchSummary" class="evaluation-batch-summary">
+        <article><span>通过任务</span><strong>{{ batchSummary.passedTasks }} / {{ batchSummary.totalTasks }}</strong></article>
+        <article><span>通过率</span><strong>{{ batchSummary.passRate.toFixed(1) }}%</strong></article>
+        <article><span>平均得分</span><strong>{{ batchSummary.averageScore.toFixed(1) }}</strong></article>
+        <article><span>P95 总耗时</span><strong>{{ (batchSummary.p95DurationMilliseconds / 1000).toFixed(1) }}s</strong></article>
+        <article><span>关键失败</span><strong>{{ batchSummary.criticalFailureCount }}</strong></article>
+      </div>
     </section>
 
     <section v-if="canManage" class="panel">
@@ -222,7 +260,18 @@ onMounted(load)
 <style scoped>
 .agent-evaluation-overview { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .agent-evaluation-run-form { display: grid; grid-template-columns: minmax(220px, .8fr) minmax(320px, 1.6fr) auto; gap: 12px; align-items: center; }
+.evaluation-baseline-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.evaluation-baseline-grid article { display: grid; gap: 8px; padding: 16px; border: 1px solid var(--line); background: var(--surface-soft); }
+.evaluation-baseline-grid span { color: var(--text-muted); font: 11px/1.4 Consolas, monospace; overflow-wrap: anywhere; }
+.evaluation-baseline-grid strong { font-size: 16px; }
+.evaluation-baseline-grid p { min-height: 4.5em; margin: 0; color: var(--text-muted); line-height: 1.5; }
+.evaluation-baseline-grid small { color: var(--text-muted); }
 .evaluation-rule-summary { margin: 14px 0 0; color: var(--text-muted); }
+.evaluation-batch-summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-top: 16px; }
+.evaluation-batch-summary article { padding: 13px 15px; border: 1px solid var(--line); background: var(--surface-soft); }
+.evaluation-batch-summary span, .evaluation-batch-summary strong { display: block; }
+.evaluation-batch-summary span { color: var(--text-muted); font-size: 12px; }
+.evaluation-batch-summary strong { margin-top: 6px; font-size: 20px; }
 .agent-evaluation-case-form { display: grid; gap: 14px; }
 .agent-evaluation-case-form > label { display: grid; gap: 7px; color: var(--text-muted); }
 .evaluation-budget-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
@@ -236,7 +285,8 @@ onMounted(load)
 .agent-dimension-grid span, .agent-dimension-grid strong { display: block; }
 .agent-dimension-grid strong { margin: 7px 0 11px; }
 @media (max-width: 900px) {
-  .agent-evaluation-overview, .evaluation-budget-grid, .agent-dimension-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .agent-evaluation-overview, .evaluation-budget-grid, .agent-dimension-grid,
+  .evaluation-baseline-grid, .evaluation-batch-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .agent-evaluation-run-form { grid-template-columns: 1fr; }
 }
 </style>

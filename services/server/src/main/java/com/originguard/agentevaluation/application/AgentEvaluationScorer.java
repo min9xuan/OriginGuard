@@ -24,7 +24,12 @@ public class AgentEvaluationScorer {
         long replans = details.steps().stream().filter(step ->
                 "REPLAN_DECIDED".equals(step.stepType()) || "REPLAN_FALLBACK".equals(step.stepType())).count();
         long duplicateReplans = duplicateReplans(details.steps());
-        long duration = durationMillis(details);
+        Map<String, Object> recordedPerformance = objectMap(details.task().conclusion().get("performance"));
+        long queueWait = metric(recordedPerformance, "queueWaitMillis", queueWaitMillis(details));
+        long executionDuration = metric(
+                recordedPerformance, "executionDurationMillis", executionDurationMillis(details));
+        long duration = metric(recordedPerformance, "endToEndMillis", endToEndMillis(details));
+        long cacheHits = metric(recordedPerformance, "cacheHitCount", 0);
         List<Map<String, Object>> violations = new ArrayList<>();
 
         double toolSelection = coverage(evaluationCase.requiredSkillCodes(), skills) * 12;
@@ -87,6 +92,10 @@ public class AgentEvaluationScorer {
         metrics.put("replanCount", replans);
         metrics.put("duplicateReplanCount", duplicateReplans);
         metrics.put("durationMilliseconds", duration);
+        metrics.put("queueWaitMillis", queueWait);
+        metrics.put("executionDurationMillis", executionDuration);
+        metrics.put("endToEndMillis", duration);
+        metrics.put("cacheHitCount", cacheHits);
         metrics.put("recordedSkillCodes", List.copyOf(skills));
         metrics.put("recordedToolCodes", List.copyOf(tools));
         metrics.put("recordedEvidenceTypes", List.copyOf(evidenceTypes));
@@ -112,11 +121,28 @@ public class AgentEvaluationScorer {
         return true;
     }
 
-    private long durationMillis(AgentTaskDetails details) {
+    private long queueWaitMillis(AgentTaskDetails details) {
+        var task = details.task();
+        if (task.startedAt() == null) return 0;
+        return Math.max(0, Duration.between(task.createdAt(), task.startedAt()).toMillis());
+    }
+
+    private long executionDurationMillis(AgentTaskDetails details) {
         var task = details.task();
         var start = task.startedAt() == null ? task.createdAt() : task.startedAt();
         var end = task.completedAt() == null ? task.updatedAt() : task.completedAt();
         return Math.max(0, Duration.between(start, end).toMillis());
+    }
+
+    private long endToEndMillis(AgentTaskDetails details) {
+        var task = details.task();
+        var end = task.completedAt() == null ? task.updatedAt() : task.completedAt();
+        return Math.max(0, Duration.between(task.createdAt(), end).toMillis());
+    }
+
+    private long metric(Map<String, Object> values, String key, long fallback) {
+        Object value = values.get(key);
+        return value instanceof Number number ? Math.max(0, number.longValue()) : fallback;
     }
 
     private long duplicateReplans(List<AgentStep> steps) {

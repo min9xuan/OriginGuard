@@ -39,3 +39,31 @@ export interface AgentEvaluationRun {
   createdBy: string
   createdAt: string
 }
+
+export interface AgentEvaluationBaseline {
+  code: string
+  name: string
+  description: string
+  requiredSkillCodes: string[]
+  forbiddenSkillCodes: string[]
+  requiredEvidenceTypes: string[]
+  forbiddenEvidenceTypes: string[]
+  maxToolCalls: number
+  maxReplans: number
+  maxDurationMilliseconds: number
+  minimumScore: number
+  requireCompleted: boolean
+  requireHumanReview: boolean
+}
+
+export interface AgentEvaluationBatchSummary {
+  runs: AgentEvaluationRun[]
+  totalTasks: number
+  passedTasks: number
+  passRate: number
+  averageScore: number
+  p95DurationMilliseconds: number
+  criticalFailureCount: number
+  violationCounts: Record<string, number>
+  averageDimensionScores: Record<string, number>
+}

@@ -10,6 +10,7 @@ import com.originguard.identity.application.CurrentActorProvider;
 import com.originguard.shared.application.BusinessConflictException;
 import com.originguard.shared.application.ResourceNotFoundException;
 import java.util.List;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
@@ -21,6 +22,8 @@ public class AgentEvaluationService {
 
     private final AgentEvaluationRepository repository;
     private final AgentEvaluationScorer scorer;
+    private final AgentEvaluationBaselines baselines;
+    private final AgentEvaluationBatchSummarizer batchSummarizer;
     private final AgentTaskService agentTaskService;
     private final CurrentActorProvider actorProvider;
     private final AuditService auditService;
@@ -28,11 +31,15 @@ public class AgentEvaluationService {
     public AgentEvaluationService(
             AgentEvaluationRepository repository,
             AgentEvaluationScorer scorer,
+            AgentEvaluationBaselines baselines,
+            AgentEvaluationBatchSummarizer batchSummarizer,
             AgentTaskService agentTaskService,
             CurrentActorProvider actorProvider,
             AuditService auditService) {
         this.repository = repository;
         this.scorer = scorer;
+        this.baselines = baselines;
+        this.batchSummarizer = batchSummarizer;
         this.agentTaskService = agentTaskService;
         this.actorProvider = actorProvider;
         this.auditService = auditService;
@@ -44,6 +51,30 @@ public class AgentEvaluationService {
 
     public List<AgentEvaluationRun> runs() {
         return repository.findRuns(actorProvider.getRequiredActor().tenantId());
+    }
+
+    public List<AgentEvaluationBaselines.Baseline> baselines() {
+        return baselines.all();
+    }
+
+    @Transactional
+    public List<AgentEvaluationCase> installBaselines() {
+        var actor = actorProvider.getRequiredActor();
+        List<AgentEvaluationCase> result = baselines.all().stream().map(template ->
+                repository.findCaseByName(actor.tenantId(), template.name()).orElseGet(() -> repository.insertCase(
+                        UUID.randomUUID(), actor.tenantId(), template.name(),
+                        "baseline=" + template.code() + "@" + AgentEvaluationBaselines.VERSION + "；"
+                                + template.description(),
+                        template.requiredSkillCodes(), template.forbiddenSkillCodes(),
+                        template.requiredEvidenceTypes(), template.forbiddenEvidenceTypes(),
+                        template.maxToolCalls(), template.maxReplans(), template.maxDurationMilliseconds(),
+                        template.minimumScore(), template.requireCompleted(), template.requireHumanReview(),
+                        actor.userId()))).toList();
+        auditService.record(actor.tenantId(), actor.userId(), "AGENT_EVALUATION_BASELINES_INSTALLED",
+                RESOURCE_TYPE, actor.tenantId(), Map.of(
+                        "version", AgentEvaluationBaselines.VERSION,
+                        "caseIds", result.stream().map(item -> item.id().toString()).toList()));
+        return result;
     }
 
     @Transactional
@@ -77,6 +108,35 @@ public class AgentEvaluationService {
         AgentEvaluationCase evaluationCase = repository.findCase(actor.tenantId(), evaluationCaseId)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "AGENT_EVALUATION_CASE_NOT_FOUND", "Agent evaluation case was not found"));
+        AgentEvaluationRun run = evaluateOne(evaluationCase, agentTaskId, actor.tenantId(), actor.userId());
+        auditService.record(actor.tenantId(), actor.userId(), "AGENT_EVALUATION_COMPLETED",
+                RESOURCE_TYPE, run.id(), Map.of(
+                        "evaluationCaseId", evaluationCaseId.toString(), "agentTaskId", agentTaskId.toString(),
+                        "score", run.totalScore(), "passed", run.passed()));
+        return run;
+    }
+
+    @Transactional
+    public AgentEvaluationBatchSummarizer.Summary evaluateBatch(UUID evaluationCaseId, List<UUID> agentTaskIds) {
+        var actor = actorProvider.getRequiredActor();
+        AgentEvaluationCase evaluationCase = repository.findCase(actor.tenantId(), evaluationCaseId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "AGENT_EVALUATION_CASE_NOT_FOUND", "Agent evaluation case was not found"));
+        List<UUID> distinctTaskIds = List.copyOf(new LinkedHashSet<>(agentTaskIds));
+        List<AgentEvaluationRun> batchRuns = distinctTaskIds.stream()
+                .map(taskId -> evaluateOne(evaluationCase, taskId, actor.tenantId(), actor.userId()))
+                .toList();
+        AgentEvaluationBatchSummarizer.Summary summary = batchSummarizer.summarize(batchRuns);
+        auditService.record(actor.tenantId(), actor.userId(), "AGENT_EVALUATION_BATCH_COMPLETED",
+                RESOURCE_TYPE, evaluationCaseId, Map.of(
+                        "taskCount", summary.totalTasks(), "passedTasks", summary.passedTasks(),
+                        "passRate", summary.passRate(), "averageScore", summary.averageScore(),
+                        "criticalFailureCount", summary.criticalFailureCount()));
+        return summary;
+    }
+
+    private AgentEvaluationRun evaluateOne(
+            AgentEvaluationCase evaluationCase, UUID agentTaskId, UUID tenantId, UUID userId) {
         AgentTaskService.AgentTaskDetails details = agentTaskService.get(agentTaskId);
         if (details.task().status() == AgentTaskStatus.PENDING || details.task().status() == AgentTaskStatus.RUNNING) {
             throw new BusinessConflictException(
@@ -84,15 +144,10 @@ public class AgentEvaluationService {
         }
         AgentEvaluationScorer.Score score = scorer.score(evaluationCase, details);
         UUID runId = UUID.randomUUID();
-        AgentEvaluationRun run = repository.insertRun(
-                runId, actor.tenantId(), evaluationCase, agentTaskId, details.task().status().name(),
+        return repository.insertRun(
+                runId, tenantId, evaluationCase, agentTaskId, details.task().status().name(),
                 score.totalScore(), score.passed(), score.criticalFailure(), score.dimensionScores(),
-                score.violations(), score.metrics(), actor.userId());
-        auditService.record(actor.tenantId(), actor.userId(), "AGENT_EVALUATION_COMPLETED",
-                RESOURCE_TYPE, runId, Map.of(
-                        "evaluationCaseId", evaluationCaseId.toString(), "agentTaskId", agentTaskId.toString(),
-                        "score", score.totalScore(), "passed", score.passed()));
-        return run;
+                score.violations(), score.metrics(), userId);
     }
 
     private List<String> normalizeCodes(List<String> values) {

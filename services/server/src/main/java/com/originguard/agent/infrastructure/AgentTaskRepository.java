@@ -79,7 +79,8 @@ public class AgentTaskRepository {
     public boolean markRunning(UUID tenantId, UUID taskId, long expectedVersion) {
         boolean updated = jdbcClient.sql("""
                         UPDATE agent_task
-                        SET status = 'RUNNING', started_at = CURRENT_TIMESTAMP,
+                        SET status = 'RUNNING', started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
+                            last_heartbeat_at = CURRENT_TIMESTAMP,
                             version = version + 1, updated_at = CURRENT_TIMESTAMP
                         WHERE tenant_id = :tenantId AND id = :taskId
                           AND status = 'PENDING' AND version = :expectedVersion
@@ -89,6 +90,38 @@ public class AgentTaskRepository {
                 .param("expectedVersion", expectedVersion)
                 .update() == 1;
         if (updated) progressService.publish(taskId, "TASK_RUNNING", Map.of("status", "RUNNING"));
+        return updated;
+    }
+
+    public void heartbeat(UUID tenantId, UUID taskId) {
+        jdbcClient.sql("""
+                        UPDATE agent_task SET last_heartbeat_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                        WHERE tenant_id = :tenantId AND id = :taskId AND status = 'RUNNING'
+                        """)
+                .param("tenantId", tenantId).param("taskId", taskId).update();
+    }
+
+    public List<AgentTask> findRecoverable(Instant staleBefore) {
+        return jdbcClient.sql(TASK_SELECT + """
+                        WHERE (status = 'PENDING' AND updated_at < :staleBefore)
+                           OR (status = 'RUNNING' AND COALESCE(last_heartbeat_at, updated_at) < :staleBefore)
+                        ORDER BY created_at
+                        """)
+                .param("staleBefore", Timestamp.from(staleBefore)).query(this::mapTask).list();
+    }
+
+    public boolean requeueStale(UUID tenantId, UUID taskId, Instant staleBefore) {
+        boolean updated = jdbcClient.sql("""
+                        UPDATE agent_task
+                        SET status = 'PENDING', recovery_count = recovery_count + 1,
+                            failure_code = NULL, failure_message = NULL, completed_at = NULL,
+                            version = version + 1, updated_at = CURRENT_TIMESTAMP
+                        WHERE tenant_id = :tenantId AND id = :taskId AND status = 'RUNNING'
+                          AND COALESCE(last_heartbeat_at, updated_at) < :staleBefore
+                        """)
+                .param("tenantId", tenantId).param("taskId", taskId)
+                .param("staleBefore", Timestamp.from(staleBefore)).update() == 1;
+        if (updated) progressService.publish(taskId, "TASK_RECOVERED", Map.of("status", "PENDING"));
         return updated;
     }
 
@@ -195,6 +228,7 @@ public class AgentTaskRepository {
                 .param("input", toJson(input))
                 .param("output", toJson(output))
                 .update();
+        heartbeat(tenantId, taskId);
         AgentStep step = findStep(tenantId, taskId, id).orElseThrow();
         progressService.publish(taskId, stepType, Map.of("sequenceNumber", sequence, "status", status));
         return step;
@@ -352,6 +386,29 @@ public class AgentTaskRepository {
                 .param("taskId", taskId)
                 .query(this::mapCheckpoint)
                 .list();
+    }
+
+    public Optional<AgentCheckpoint> findLatestCheckpoint(UUID tenantId, UUID taskId) {
+        return jdbcClient.sql("""
+                        SELECT id, task_id, checkpoint_version, state::text AS state, created_at
+                        FROM agent_checkpoint
+                        WHERE tenant_id = :tenantId AND task_id = :taskId
+                        ORDER BY checkpoint_version DESC LIMIT 1
+                        """)
+                .param("tenantId", tenantId).param("taskId", taskId)
+                .query(this::mapCheckpoint).optional();
+    }
+
+    public Map<String, Object> findLatestToolOutput(UUID tenantId, UUID taskId, String skillCode) {
+        return jdbcClient.sql("""
+                        SELECT output::text AS output
+                        FROM agent_step
+                        WHERE tenant_id = :tenantId AND task_id = :taskId
+                          AND skill_code = :skillCode AND step_type = 'TOOL_CALLED' AND status = 'SUCCEEDED'
+                        ORDER BY sequence_number DESC LIMIT 1
+                        """)
+                .param("tenantId", tenantId).param("taskId", taskId).param("skillCode", skillCode)
+                .query((rs, row) -> readJson(rs.getString("output"))).optional().orElse(Map.of());
     }
 
     public List<AgentKnowledgeRetrieval> findKnowledgeRetrievals(UUID tenantId, UUID taskId) {

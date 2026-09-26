@@ -38,25 +38,49 @@ export const agentApi = {
     onProgress: (event: Record<string, unknown>) => void | Promise<void>,
     signal?: AbortSignal,
   ) {
-    const response = await fetch(`/api/v1/agent-tasks/${taskId}/events`, {
-      headers: { Authorization: `Bearer ${accessToken}`, Accept: 'text/event-stream' },
-      credentials: 'include', signal,
-    })
-    if (!response.ok || !response.body) throw new Error(`SSE connection failed: ${response.status}`)
-    const reader = response.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-    while (true) {
-      const { value, done } = await reader.read()
-      if (done) return
-      buffer += decoder.decode(value, { stream: true })
-      const frames = buffer.split(/\r?\n\r?\n/)
-      buffer = frames.pop() ?? ''
-      for (const frame of frames) {
-        if (frame.includes('event:progress')) {
-          const data = frame.split(/\r?\n/).find(line => line.startsWith('data:'))?.slice(5).trim()
-          await onProgress(data ? JSON.parse(data) as Record<string, unknown> : {})
+    let lastEventId = 0
+    let retryDelay = 500
+    while (!signal?.aborted) {
+      try {
+        const response = await fetch(`/api/v1/agent-tasks/${taskId}/events?lastEventId=${lastEventId}`, {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            Accept: 'text/event-stream',
+            ...(lastEventId > 0 ? { 'Last-Event-ID': String(lastEventId) } : {}),
+          },
+          credentials: 'include', signal,
+        })
+        if (!response.ok || !response.body) throw new Error(`SSE connection failed: ${response.status}`)
+        retryDelay = 500
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+        while (!signal?.aborted) {
+          const { value, done } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          const frames = buffer.split(/\r?\n\r?\n/)
+          buffer = frames.pop() ?? ''
+          for (const frame of frames) {
+            const lines = frame.split(/\r?\n/)
+            const id = lines.find(line => line.startsWith('id:'))?.slice(3).trim()
+            if (id && Number.isFinite(Number(id))) lastEventId = Math.max(lastEventId, Number(id))
+            if (lines.some(line => line.trim() === 'event:progress')) {
+              const data = lines.find(line => line.startsWith('data:'))?.slice(5).trim()
+              await onProgress(data ? JSON.parse(data) as Record<string, unknown> : {})
+            }
+          }
         }
+      } catch (error) {
+        if (signal?.aborted) return
+        await new Promise<void>((resolve, reject) => {
+          const timeout = window.setTimeout(resolve, retryDelay)
+          signal?.addEventListener('abort', () => {
+            window.clearTimeout(timeout)
+            reject(new DOMException('Aborted', 'AbortError'))
+          }, { once: true })
+        })
+        retryDelay = Math.min(retryDelay * 2, 10_000)
       }
     }
   },

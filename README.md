@@ -59,8 +59,10 @@ OriginGuard 是一个对话式媒体调查工作台。普通问题由本地大�
 - 声明式 Skill、Tool 白名单、RBAC、案件状态约束和 Step Budget。
 - Observation 驱动动态重规划，并对异常计划提供确定性安全降级。
 - RabbitMQ 异步执行，SSE 实时推送步骤、结果和失败状态。
-- Checkpoint、幂等消费、死信队列、Redis 入队去重与用户级限流。
-- 基于真实任务 Trace 的 Agent Evaluation，覆盖规划、工具选择、证据忠实度、鲁棒性和性能。
+- Checkpoint 断点续跑、数据库版本幂等消费、死信队列重放、Redis 入队去重与用户级限流。
+- 每个工具独立熔断，统一施加总超时、有限重试和确定性不可用降级；服务会定期接管失去心跳的任务。
+- SSE 事件持久化并携带事件游标，浏览器断线后自动重连和补发进度（每个任务保留最近 2,000 条）。
+- 基于真实任务 Trace 的 Agent Evaluation，提供版本化端到端基线、最多 100 个任务的批量回归，并汇总通过率、P95 耗时、证据忠实度、鲁棒性和高频违规。
 
 ### 媒体取证
 
@@ -220,6 +222,20 @@ Copy-Item .env.example .env
 
 RabbitMQ 主要降低 HTTP 请求阻塞并提升并发承载能力，不会缩短一次冷模型推理。相同媒体与相同模型配置的热缓存任务才会显著降低耗时。
 
+### Agent 可靠性参数
+
+| 环境变量 | 默认值 | 作用 |
+| --- | --- | --- |
+| `AGENT_TOOL_TIMEOUT` | `PT12M` | 单次工具调用的 Harness 总超时；各模型 HTTP 超时仍可独立配置 |
+| `AGENT_TOOL_MAX_ATTEMPTS` | `2` | 工具最大尝试次数 |
+| `AGENT_TOOL_RETRY_BACKOFF` | `PT2S` | 线性递增的重试基础间隔 |
+| `AGENT_CIRCUIT_FAILURE_THRESHOLD` | `3` | 单个工具连续失败后打开熔断器的阈值 |
+| `AGENT_CIRCUIT_OPEN_DURATION` | `PT1M` | 熔断窗口 |
+| `AGENT_STALE_AFTER` | `PT15M` | RUNNING/PENDING 任务无心跳后允许接管的时间 |
+| `AGENT_RECOVERY_SCAN_MILLIS` | `60000` | 未完成任务恢复扫描周期 |
+
+管理员可调用 `POST /api/v1/agent-tasks/dead-letters/replay?limit=10` 将 RabbitMQ 死信任务重新投递。重复消息通过任务状态和数据库版本进行原子认领，不会并行执行同一个任务。恢复任务会读取最新 Checkpoint，跳过已经完成的 Skill，并使用已记录的工具输出继续生成结论。
+
 ## 安全边界
 
 - JWT Access Token 与 HttpOnly Refresh Cookie 轮换。
@@ -264,7 +280,7 @@ python -m mypy --config-file pyproject.toml src
 - 接入数字绘画、矢量卡通和 3D 渲染的跨域专用检测能力。
 - 扩展视频抽帧、关键帧检测和时序一致性分析。
 - 提供可导出的结构化真实性分析报告。
-- 增加工具超时、消息重复投递、提示注入和 Checkpoint 恢复评测。
+- 增加消息重复投递、模型进程崩溃、SSE 断线与 Checkpoint 恢复的故障注入评测。
 
 ## 使用声明
 

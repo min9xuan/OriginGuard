@@ -520,6 +520,16 @@ function localizationCaption(observationId: string) {
   return ({ overlay: '疑似篡改叠加图', heatmap: '像素响应热力图', mask: '阈值化定位掩码' } as const)[localizationMode(observationId)]
 }
 
+function isQuietLocalization(observation: AgentObservation) {
+  if (observation.payload.status !== 'SUCCEEDED') return false
+  const regions = Array.isArray(observation.payload.regions) ? observation.payload.regions : []
+  return regions.length === 0 && String(observation.payload.classification) !== 'SUSPICIOUS_MANIPULATION'
+}
+
+function isQuietHeatmap(observation: AgentObservation) {
+  return localizationMode(observation.id) === 'heatmap' && isQuietLocalization(observation)
+}
+
 async function loadForensicVisualizations(taskDetails: AgentTaskDetails) {
   releaseVisualizations()
   const observations = taskDetails.observations.filter((item) =>
@@ -960,7 +970,16 @@ onBeforeUnmount(() => {
                       @click="setLocalizationMode(activeLocalizationObservation.id, mode.key as 'overlay' | 'heatmap' | 'mask')"
                     >{{ mode.label }}</button>
                   </div>
-                  <img v-if="localizationUrl(activeLocalizationObservation.id)" :src="localizationUrl(activeLocalizationObservation.id)" alt="当前图片的疑似篡改定位结果" />
+                  <div
+                    v-if="localizationUrl(activeLocalizationObservation.id)"
+                    :class="['localization-visual-stage', { 'is-quiet-heatmap': isQuietHeatmap(activeLocalizationObservation) }]"
+                  >
+                    <img :src="localizationUrl(activeLocalizationObservation.id)" alt="当前图片的疑似篡改定位结果" />
+                    <div v-if="isQuietHeatmap(activeLocalizationObservation)" class="quiet-heatmap-note">
+                      <span aria-hidden="true"></span>
+                      <div><strong>响应保持在低位</strong><small>未形成超过阈值的连续候选区域</small></div>
+                    </div>
+                  </div>
                   <div v-else class="visual-placeholder">{{ activeLocalizationObservation.payload.status === 'SUCCEEDED' ? '定位图暂不可用' : 'Mesorch 当前未配置或执行失败' }}</div>
                   <figcaption>{{ localizationCaption(activeLocalizationObservation.id) }}（像素响应仅供人工核验）</figcaption>
                 </figure>
@@ -1203,7 +1222,16 @@ onBeforeUnmount(() => {
                       @click="setLocalizationMode(item.id, mode.key as 'overlay' | 'heatmap' | 'mask')"
                     >{{ mode.label }}</button>
                   </div>
-                  <img v-if="localizationUrl(item.id)" :src="localizationUrl(item.id)" alt="疑似篡改区域定位结果" />
+                  <div
+                    v-if="localizationUrl(item.id)"
+                    :class="['localization-visual-stage', { 'is-quiet-heatmap': isQuietHeatmap(item) }]"
+                  >
+                    <img :src="localizationUrl(item.id)" alt="疑似篡改区域定位结果" />
+                    <div v-if="isQuietHeatmap(item)" class="quiet-heatmap-note">
+                      <span aria-hidden="true"></span>
+                      <div><strong>响应保持在低位</strong><small>未形成超过阈值的连续候选区域</small></div>
+                    </div>
+                  </div>
                   <div v-else class="visual-placeholder">{{ item.payload.status === 'SUCCEEDED' ? '定位图暂不可用' : 'Mesorch 当前未配置或执行失败' }}</div>
                   <figcaption>{{ localizationCaption(item.id) }}</figcaption>
                 </figure>

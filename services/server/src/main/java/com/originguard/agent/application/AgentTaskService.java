@@ -40,6 +40,7 @@ public class AgentTaskService {
     private final AgentPlanValidator planValidator;
     private final SkillRegistry skillRegistry;
     private final ToolRegistry toolRegistry;
+    private final AgentToolExecutor toolExecutor;
     private final AgentPolicyEngine policyEngine;
     private final AuditService auditService;
     private final AgentArtifactStorage artifactStorage;
@@ -55,6 +56,7 @@ public class AgentTaskService {
             AgentPlanValidator planValidator,
             SkillRegistry skillRegistry,
             ToolRegistry toolRegistry,
+            AgentToolExecutor toolExecutor,
             AgentPolicyEngine policyEngine,
             AuditService auditService,
             AgentArtifactStorage artifactStorage,
@@ -68,6 +70,7 @@ public class AgentTaskService {
         this.planValidator = planValidator;
         this.skillRegistry = skillRegistry;
         this.toolRegistry = toolRegistry;
+        this.toolExecutor = toolExecutor;
         this.policyEngine = policyEngine;
         this.auditService = auditService;
         this.artifactStorage = artifactStorage;
@@ -198,6 +201,38 @@ public class AgentTaskService {
             int remainingBudget = running.remainingStepBudget();
             long checkpointVersion = running.checkpointVersion();
 
+            AgentCheckpoint resumeCheckpoint = repository.findLatestCheckpoint(actor.tenantId(), taskId).orElse(null);
+            boolean resumed = resumeCheckpoint != null;
+            int restoredReplanCount = 0;
+            if (resumed) {
+                Map<String, Object> state = resumeCheckpoint.state();
+                executedSkills.addAll(stringList(state.get("completedSkills")));
+                observationIds.addAll(stringList(state.get("observationIds")));
+                knowledgeRetrievalIds.addAll(stringList(state.get("knowledgeRetrievalIds")));
+                remainingBudget = integerValue(state.get("remainingStepBudget"), remainingBudget);
+                restoredReplanCount = integerValue(state.get("replanCount"), 0);
+                checkpointVersion = Math.max(checkpointVersion, resumeCheckpoint.checkpointVersion());
+                aigcDetection = repository.findLatestToolOutput(
+                        actor.tenantId(), taskId, SkillRegistry.AIGC_DETECTION_SKILL);
+                manipulationLocalization = repository.findLatestToolOutput(
+                        actor.tenantId(), taskId, SkillRegistry.MANIPULATION_LOCALIZATION_SKILL);
+                retrievalEvidence = repository.findLatestToolOutput(
+                        actor.tenantId(), taskId, SkillRegistry.RAG_SKILL);
+                integrityAnalysis = repository.findLatestToolOutput(
+                        actor.tenantId(), taskId, SkillRegistry.INTEGRITY_SKILL);
+                similarityAnalysis = repository.findLatestToolOutput(
+                        actor.tenantId(), taskId, SkillRegistry.SIMILARITY_SKILL);
+                repository.appendStep(
+                        actor.tenantId(), taskId, "TASK_RESUMED_FROM_CHECKPOINT", "SUCCEEDED", null, null,
+                        Map.of("checkpointVersion", checkpointVersion),
+                        Map.of("completedSkills", List.copyOf(executedSkills),
+                                "remainingStepBudget", remainingBudget));
+            }
+
+            Map<UUID, Map<String, Object>> mediaTypeContexts = restoredMediaTypeContexts(
+                    actor.tenantId(), taskId, executedSkills);
+            AgentExecutionContext enrichedContext;
+            if (!executedSkills.contains(SkillRegistry.MEDIA_TYPE_SKILL)) {
             remainingBudget = consumeBudget(remainingBudget);
             SkillDefinition mediaTypeSkill = skillRegistry.require(
                     SkillRegistry.MEDIA_TYPE_SKILL, SkillRegistry.SKILL_VERSION);
@@ -224,11 +259,11 @@ public class AgentTaskService {
                     mediaTypeSkill.code(), mediaTypeTool.code(),
                     Map.of("assetCount", context.assets().size()),
                     Map.of("message", "正在使用 CLIP 识别媒体内容类型"));
-            Map<String, Object> mediaTypeOutput = mediaTypeTool.execute(context, mediaTypeInput);
+            Map<String, Object> mediaTypeOutput = executeReliably(
+                    actor.tenantId(), taskId, mediaTypeSkill, mediaTypeTool, context, mediaTypeInput);
             repository.appendStep(
                     actor.tenantId(), taskId, "TOOL_CALLED", "SUCCEEDED",
                     mediaTypeSkill.code(), mediaTypeTool.code(), mediaTypeInput, mediaTypeOutput);
-            Map<UUID, Map<String, Object>> mediaTypeContexts = new LinkedHashMap<>();
             for (Map<String, Object> finding : findings(mediaTypeOutput, "CLIP")) {
                 UUID assetId = UUID.fromString(String.valueOf(finding.get("assetId")));
                 mediaTypeContexts.put(assetId, finding);
@@ -245,7 +280,7 @@ public class AgentTaskService {
                                 "evidenceType", observation.evidenceType(),
                                 "summary", observation.summary()));
             }
-            AgentExecutionContext enrichedContext = context.withMediaTypeContexts(mediaTypeContexts);
+            enrichedContext = context.withMediaTypeContexts(mediaTypeContexts);
             executedSkills.add(mediaTypeSkill.code());
             checkpointVersion++;
             repository.insertCheckpoint(
@@ -261,6 +296,9 @@ public class AgentTaskService {
                     mediaTypeSkill.code(), null,
                     Map.of("checkpointVersion", checkpointVersion),
                     Map.of("remainingStepBudget", remainingBudget));
+            } else {
+                enrichedContext = context.withMediaTypeContexts(mediaTypeContexts);
+            }
 
             repository.appendStep(
                     actor.tenantId(), taskId, "PLAN_REQUESTED", "SUCCEEDED",
@@ -290,7 +328,9 @@ public class AgentTaskService {
                                     .toList(),
                             "trace", generatedPlan.trace()));
             AgentPlanner.PlannerPlan plan = planValidator.validate(
-                    generatedPlan, remainingBudget);
+                    generatedPlan, resumed
+                            ? Math.max(remainingBudget, generatedPlan.skills().size() * 2 + 1)
+                            : remainingBudget);
             repository.appendStep(
                     actor.tenantId(), taskId, "PLAN_VALIDATED", "SUCCEEDED",
                     plan.planCode(), null,
@@ -300,10 +340,11 @@ public class AgentTaskService {
                                     .filter(SkillDefinition::required).map(SkillDefinition::code).toList(),
                             "requiredStepBudget", 2 + plan.skills().size() * 2 + 1));
 
-            int planPosition = 0;
-            int replanCount = 0;
+            int planPosition = Math.max(0, executedSkills.size() - 1);
+            int replanCount = restoredReplanCount;
             boolean replanningEnabled = maxReplans > 0;
             List<AgentPlanner.SkillSelection> pendingSkills = new ArrayList<>(plan.skills());
+            pendingSkills.removeIf(selection -> executedSkills.contains(selection.skillCode()));
             while (!pendingSkills.isEmpty()) {
                 AgentPlanner.SkillSelection selection = pendingSkills.removeFirst();
                 List<AgentPlanner.ObservationDigest> latestObservations = new ArrayList<>();
@@ -337,7 +378,8 @@ public class AgentTaskService {
                         skill.code(), tool.code(),
                         Map.of("assetCount", enrichedContext.assets().size()),
                         Map.of("message", "正在执行“" + skill.description() + "”"));
-                Map<String, Object> toolOutput = tool.execute(enrichedContext, toolInput);
+                Map<String, Object> toolOutput = executeReliably(
+                        actor.tenantId(), taskId, skill, tool, enrichedContext, toolInput);
                 if (SkillRegistry.AIGC_DETECTION_SKILL.equals(skill.code())) {
                     aigcDetection = toolOutput;
                 }
@@ -631,6 +673,103 @@ public class AgentTaskService {
         return selections.stream().map(AgentPlanner.SkillSelection::skillCode).toList();
     }
 
+    private Map<UUID, Map<String, Object>> restoredMediaTypeContexts(
+            UUID tenantId, UUID taskId, List<String> completedSkills) {
+        Map<UUID, Map<String, Object>> result = new LinkedHashMap<>();
+        if (!completedSkills.contains(SkillRegistry.MEDIA_TYPE_SKILL)) return result;
+        for (AgentObservation observation : repository.findObservations(tenantId, taskId)) {
+            if (observation.assetId() != null
+                    && "MEDIA_TYPE_CLASSIFICATION".equals(observation.evidenceType())) {
+                result.put(observation.assetId(), observation.payload());
+            }
+        }
+        return result;
+    }
+
+    private List<String> stringList(Object value) {
+        if (!(value instanceof List<?> values)) return List.of();
+        return values.stream().map(String::valueOf).toList();
+    }
+
+    private int integerValue(Object value, int fallback) {
+        return value instanceof Number number ? number.intValue() : fallback;
+    }
+
+    private Map<String, Object> executeReliably(
+            UUID tenantId, UUID taskId, SkillDefinition skill, AgentTool tool,
+            AgentExecutionContext context, Map<String, Object> input) {
+        try {
+            return toolExecutor.execute(tool, context, input, new AgentToolExecutor.AttemptListener() {
+                @Override
+                public void onAttempt(int attempt, int maxAttempts) {
+                    repository.heartbeat(tenantId, taskId);
+                    if (attempt > 1) {
+                        repository.appendStep(tenantId, taskId, "TOOL_RETRY_STARTED", "SUCCEEDED",
+                                skill.code(), tool.code(), Map.of("attempt", attempt, "maxAttempts", maxAttempts),
+                                Map.of("message", "正在重试模型工具"));
+                    }
+                }
+
+                @Override
+                public void onRetry(int attempt, RuntimeException failure) {
+                    repository.appendStep(tenantId, taskId, "TOOL_RETRY_SCHEDULED", "FAILED",
+                            skill.code(), tool.code(), Map.of("attempt", attempt),
+                            Map.of("message", safeMessage(failure)));
+                }
+            });
+        } catch (AgentToolExecutor.AgentToolExecutionException failure) {
+            repository.appendStep(tenantId, taskId, "TOOL_DEGRADED", "FAILED",
+                    skill.code(), tool.code(), Map.of("toolCode", tool.code()),
+                    Map.of("failureCode", failure.code(), "message", safeMessage(failure),
+                            "deterministicFallback", true));
+            return degradedToolOutput(skill, tool, context, failure);
+        }
+    }
+
+    private Map<String, Object> degradedToolOutput(
+            SkillDefinition skill, AgentTool tool, AgentExecutionContext context,
+            AgentToolExecutor.AgentToolExecutionException failure) {
+        List<Map<String, Object>> findings = context.assets().stream().map(asset -> {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("assetId", asset.id().toString());
+            item.put("filename", asset.originalFilename());
+            item.put("status", "UNAVAILABLE");
+            item.put("classification", "INCONCLUSIVE");
+            item.put("syntheticProbability", 0.0);
+            item.put("tamperedProbability", 0.0);
+            item.put("tamperedAreaRatio", 0.0);
+            item.put("mediaTypeLabel", "类型不明确");
+            item.put("mediaTypeScore", 0.0);
+            item.put("failureCode", failure.code());
+            item.put("failureMessage", safeMessage(failure));
+            item.put("evidenceUsable", false);
+            return Map.copyOf(item);
+        }).toList();
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("provider", tool.code());
+        output.put("status", "UNAVAILABLE");
+        output.put("failureCode", failure.code());
+        output.put("failureMessage", safeMessage(failure));
+        output.put("deterministicFallback", true);
+        output.put("findings", findings);
+        output.put("analyzedImageCount", context.assets().size());
+        output.put("succeededImageCount", 0);
+        output.put("overallClassification", "INCONCLUSIVE");
+        output.put("allChecksPassed", false);
+        output.put("comparisonCount", 0);
+        if (SkillRegistry.RAG_SKILL.equals(skill.code())) {
+            output.put("query", "");
+            output.put("retrievalMode", "DEGRADED");
+            output.put("embeddingProvider", "UNAVAILABLE");
+            output.put("knowledgeAvailable", false);
+            output.put("citations", List.of());
+            output.put("webSourceCount", 0);
+            output.put("webProvider", "UNAVAILABLE");
+            output.put("webSearchStatus", "FAILED");
+        }
+        return Map.copyOf(output);
+    }
+
     private int cacheHitCount(Object value) {
         if (value instanceof Map<?, ?> map) {
             int result = Boolean.TRUE.equals(map.get("cacheHit")) ? 1 : 0;
@@ -694,6 +833,10 @@ public class AgentTaskService {
     }
 
     private String summaryFor(String skillCode, int assetCount, Map<String, Object> toolOutput) {
+        if ("UNAVAILABLE".equals(toolOutput.get("status"))) {
+            return "“" + toolOutput.getOrDefault("provider", "模型工具")
+                    + "”执行失败，本次已按确定性降级记录能力不可用状态，不形成支持或反对结论的证据。";
+        }
         return switch (skillCode) {
             case SkillRegistry.INTEGRITY_SKILL -> Boolean.TRUE.equals(toolOutput.get("allChecksPassed"))
                     ? "已对 " + assetCount + " 个媒体文件完成完整性核验，登记信息与实际文件一致。"
@@ -738,6 +881,10 @@ public class AgentTaskService {
     }
 
     private String mediaTypeFindingSummary(Map<String, Object> finding) {
+        if ("UNAVAILABLE".equals(finding.get("status"))) {
+            return "“" + finding.getOrDefault("filename", "当前图片")
+                    + "”的媒体类型识别不可用；后续模型将使用保守路由，该结果不参与真伪判断。";
+        }
         return "CLIP 将“" + finding.getOrDefault("filename", "当前图片") + "”识别为“"
                 + finding.getOrDefault("mediaTypeLabel", "类型不明确") + "”，类型相对匹配度为 "
                 + percent(finding.get("mediaTypeScore"))
@@ -764,6 +911,10 @@ public class AgentTaskService {
     }
 
     private String aigcFindingSummary(Map<String, Object> finding) {
+        if (!"SUCCEEDED".equals(finding.get("status"))) {
+            return "“" + finding.getOrDefault("filename", "当前图片")
+                    + "”未取得生成内容鉴别结果；已记录模型能力不可用，本次不以默认分数判断真伪。";
+        }
         Map<String, Object> routing = objectMap(finding.get("modelRouting"));
         String routingNote = Boolean.TRUE.equals(routing.get("degraded"))
                 ? " 当前按媒体类型降级使用通用模型，专用能力尚待接入。"

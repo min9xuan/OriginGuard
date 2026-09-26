@@ -1,6 +1,8 @@
 package com.originguard.agentevaluation.interfaces;
 
 import com.originguard.agentevaluation.application.AgentEvaluationService;
+import com.originguard.agentevaluation.application.AgentEvaluationBaselines;
+import com.originguard.agentevaluation.application.AgentEvaluationBatchSummarizer;
 import com.originguard.agentevaluation.domain.AgentEvaluationCase;
 import com.originguard.agentevaluation.domain.AgentEvaluationRun;
 import jakarta.validation.Valid;
@@ -37,6 +39,18 @@ public class AgentEvaluationController {
         return service.cases();
     }
 
+    @GetMapping("/baselines")
+    @PreAuthorize("hasAuthority('model:read')")
+    public List<AgentEvaluationBaselines.Baseline> baselines() {
+        return service.baselines();
+    }
+
+    @PostMapping("/baselines/install")
+    @PreAuthorize("hasAuthority('model:manage')")
+    public List<AgentEvaluationCase> installBaselines() {
+        return service.installBaselines();
+    }
+
     @PostMapping("/cases")
     @PreAuthorize("hasAuthority('model:manage')")
     @ResponseStatus(HttpStatus.CREATED)
@@ -68,6 +82,14 @@ public class AgentEvaluationController {
         return service.evaluate(request.evaluationCaseId(), request.agentTaskId());
     }
 
+    @PostMapping("/runs/batch")
+    @PreAuthorize("hasAuthority('model:manage')")
+    @ResponseStatus(HttpStatus.CREATED)
+    public AgentEvaluationBatchSummarizer.Summary evaluateBatch(
+            @Valid @RequestBody BatchEvaluateRequest request) {
+        return service.evaluateBatch(request.evaluationCaseId(), request.agentTaskIds());
+    }
+
     public record CreateCaseRequest(
             @NotBlank @Size(max = 160) String name,
             @Size(max = 1000) String description,
@@ -83,4 +105,8 @@ public class AgentEvaluationController {
             boolean requireHumanReview) {}
 
     public record EvaluateRequest(@NotNull UUID evaluationCaseId, @NotNull UUID agentTaskId) {}
+
+    public record BatchEvaluateRequest(
+            @NotNull UUID evaluationCaseId,
+            @NotNull @Size(min = 1, max = 100) List<@NotNull UUID> agentTaskIds) {}
 }

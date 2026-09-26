@@ -1,5 +1,7 @@
 import { apiRequest } from './http'
-import type { AgentEvaluationCase, AgentEvaluationRun } from '../types/agent-evaluation'
+import type {
+  AgentEvaluationBaseline, AgentEvaluationBatchSummary, AgentEvaluationCase, AgentEvaluationRun,
+} from '../types/agent-evaluation'
 
 export interface CreateAgentEvaluationCaseRequest {
   name: string
@@ -17,6 +19,12 @@ export interface CreateAgentEvaluationCaseRequest {
 }
 
 export const agentEvaluationApi = {
+  baselines: (accessToken: string) =>
+    apiRequest<AgentEvaluationBaseline[]>('/agent-evaluations/baselines', {}, accessToken),
+  installBaselines: (accessToken: string) =>
+    apiRequest<AgentEvaluationCase[]>('/agent-evaluations/baselines/install', {
+      method: 'POST',
+    }, accessToken),
   cases: (accessToken: string) =>
     apiRequest<AgentEvaluationCase[]>('/agent-evaluations/cases', {}, accessToken),
   createCase: (request: CreateAgentEvaluationCaseRequest, accessToken: string) =>
@@ -30,5 +38,9 @@ export const agentEvaluationApi = {
   evaluate: (evaluationCaseId: string, agentTaskId: string, accessToken: string) =>
     apiRequest<AgentEvaluationRun>('/agent-evaluations/runs', {
       method: 'POST', body: JSON.stringify({ evaluationCaseId, agentTaskId }),
+    }, accessToken),
+  evaluateBatch: (evaluationCaseId: string, agentTaskIds: string[], accessToken: string) =>
+    apiRequest<AgentEvaluationBatchSummary>('/agent-evaluations/runs/batch', {
+      method: 'POST', body: JSON.stringify({ evaluationCaseId, agentTaskIds }),
     }, accessToken),
 }

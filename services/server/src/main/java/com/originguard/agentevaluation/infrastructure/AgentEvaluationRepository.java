@@ -59,6 +59,11 @@ public class AgentEvaluationRepository {
                 .param("tenantId", tenantId).param("id", id).query(this::mapCase).optional();
     }
 
+    public Optional<AgentEvaluationCase> findCaseByName(UUID tenantId, String name) {
+        return jdbcClient.sql(CASE_SELECT + " WHERE tenant_id=:tenantId AND name=:name")
+                .param("tenantId", tenantId).param("name", name).query(this::mapCase).optional();
+    }
+
     public List<AgentEvaluationCase> findCases(UUID tenantId) {
         return jdbcClient.sql(CASE_SELECT + " WHERE tenant_id=:tenantId ORDER BY created_at DESC, id")
                 .param("tenantId", tenantId).query(this::mapCase).list();

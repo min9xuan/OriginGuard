@@ -9,8 +9,10 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 @Configuration
+@EnableScheduling
 @ConditionalOnProperty(name = "originguard.agent.async.enabled", havingValue = "true")
 public class AgentMessagingConfiguration {
     public static final String EXCHANGE = "originguard.agent";

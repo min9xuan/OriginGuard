@@ -90,9 +90,17 @@ originguard:
     cache:
       enabled: ${AGENT_CACHE_ENABLED:true}
       ttl: ${AGENT_CACHE_TTL:PT6H}
-    rate-limit:
-      requests-per-minute: ${AGENT_REQUESTS_PER_MINUTE:20}
-    max-replans: ${AGENT_MAX_REPLANS:6}
+      rate-limit:
+        requests-per-minute: ${AGENT_REQUESTS_PER_MINUTE:20}
+      reliability:
+        tool-timeout: ${AGENT_TOOL_TIMEOUT:PT12M}
+        tool-max-attempts: ${AGENT_TOOL_MAX_ATTEMPTS:2}
+        tool-retry-backoff: ${AGENT_TOOL_RETRY_BACKOFF:PT2S}
+        circuit-failure-threshold: ${AGENT_CIRCUIT_FAILURE_THRESHOLD:3}
+        circuit-open-duration: ${AGENT_CIRCUIT_OPEN_DURATION:PT1M}
+        stale-after: ${AGENT_STALE_AFTER:PT15M}
+        recovery-scan-millis: ${AGENT_RECOVERY_SCAN_MILLIS:60000}
+      max-replans: ${AGENT_MAX_REPLANS:6}
     aigc-detector:
       provider: ${AIGC_DETECTOR_PROVIDER:model-api}
       base-url: ${MODEL_API_BASE_URL:http://127.0.0.1:8090}

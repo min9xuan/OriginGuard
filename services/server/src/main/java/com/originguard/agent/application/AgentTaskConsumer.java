@@ -44,7 +44,9 @@ public class AgentTaskConsumer {
         actors.runAs(actor, () -> {
             AgentTaskService.AgentTaskDetails current = tasks.get(message.taskId());
             AgentTaskService.AgentTaskDetails completed = switch (current.task().status()) {
-                case PENDING -> tasks.run(message.taskId(), message.expectedVersion());
+                // The database version is the idempotency token. A redelivered pre-recovery message may
+                // carry an older version, so only the freshly-read version is allowed to claim the task.
+                case PENDING -> tasks.run(message.taskId(), current.task().version());
                 case RUNNING -> current;
                 default -> current;
             };
