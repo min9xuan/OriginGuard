@@ -54,7 +54,7 @@ class AgentHarnessIntegrationTests {
             new PostgreSQLContainer<>("pgvector/pgvector:pg16");
 
     @Container
-    static final GenericContainer<?> MINIO = new GenericContainer<>("minio/minio:latest")
+    static final GenericContainer<?> MINIO = new GenericContainer<>("quay.io/minio/minio:RELEASE.2025-09-06T17-38-46Z")
             .withEnv("MINIO_ROOT_USER", "originguard")
             .withEnv("MINIO_ROOT_PASSWORD", "change-me-now")
             .withCommand("server", "/data")
