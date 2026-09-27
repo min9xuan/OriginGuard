@@ -17,7 +17,6 @@ jobs:
         with: { distribution: temurin, java-version: 22, cache: maven }
       - name: Run Maven verify
         id: maven-verify
-        continue-on-error: true
         run: mvn --batch-mode verify
       - name: Publish backend test summary
         if: always()
@@ -57,6 +56,3 @@ jobs:
           name: backend-test-reports
           path: services/server/target/surefire-reports/
           if-no-files-found: warn
-      - name: Enforce Maven verify result
-        if: steps.maven-verify.outcome == 'failure'
-        run: exit 1
