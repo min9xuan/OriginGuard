@@ -9,28 +9,31 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 
 import com.jayway.jsonpath.JsonPath;
+import com.originguard.media.infrastructure.ObjectStorage;
 import java.awt.Color;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.security.MessageDigest;
 import java.util.HexFormat;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import javax.imageio.ImageIO;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.mock.web.MockMultipartFile;
-import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
@@ -45,6 +48,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @AutoConfigureMockMvc
 @ActiveProfiles("local")
 @Testcontainers
+@Import(AgentHarnessIntegrationTests.TestStorageConfiguration.class)
 class AgentHarnessIntegrationTests {
     private static final String PASSWORD = "OriginGuard@123";
 
@@ -53,25 +57,36 @@ class AgentHarnessIntegrationTests {
     static final PostgreSQLContainer<?> POSTGRES =
             new PostgreSQLContainer<>("pgvector/pgvector:pg16");
 
-    @Container
-    static final GenericContainer<?> MINIO = new GenericContainer<>("quay.io/minio/minio:RELEASE.2025-09-06T17-38-46Z")
-            .withEnv("MINIO_ROOT_USER", "originguard")
-            .withEnv("MINIO_ROOT_PASSWORD", "change-me-now")
-            .withCommand("server", "/data")
-            .withExposedPorts(9000)
-            .waitingFor(Wait.forHttp("/minio/health/live").forPort(9000));
-
-    @DynamicPropertySource
-    static void storageProperties(DynamicPropertyRegistry registry) {
-        registry.add("originguard.storage.endpoint",
-                () -> "http://" + MINIO.getHost() + ":" + MINIO.getMappedPort(9000));
-        registry.add("originguard.storage.access-key", () -> "originguard");
-        registry.add("originguard.storage.secret-key", () -> "change-me-now");
-        registry.add("originguard.storage.bucket", () -> "agent-test-media");
-    }
-
     @Autowired
     MockMvc mockMvc;
+
+    @TestConfiguration(proxyBeanMethods = false)
+    static class TestStorageConfiguration {
+        @Bean
+        @Primary
+        ObjectStorage testObjectStorage() {
+            return new ObjectStorage() {
+                private final Map<String, byte[]> objects = new ConcurrentHashMap<>();
+
+                @Override
+                public void put(String objectKey, byte[] content, String contentType) {
+                    objects.put(objectKey, content.clone());
+                }
+
+                @Override
+                public byte[] get(String objectKey) {
+                    byte[] content = objects.get(objectKey);
+                    if (content == null) throw new IllegalStateException("Test object was not found: " + objectKey);
+                    return content.clone();
+                }
+
+                @Override
+                public void remove(String objectKey) {
+                    objects.remove(objectKey);
+                }
+            };
+        }
+    }
 
     @Test
     void conversationWorkbenchAnswersGeneralQuestionsWithoutCreatingAgentTask() throws Exception {
