@@ -23,6 +23,15 @@ jobs:
         if: always()
         shell: bash
         run: |
+          if [[ "${{ steps.maven-verify.outcome }}" == "failure" ]] && compgen -G "target/surefire-reports/*.txt" > /dev/null; then
+            grep -hE '<<< FAILURE!|Failures:|Errors:|Caused by:|AssertionError|expected:|but was:|ERROR:' \
+              target/surefire-reports/*.txt | head -40 | while IFS= read -r line; do
+              line="${line//'%'/'%25'}"
+              line="${line//$'\r'/'%0D'}"
+              line="${line//$'\n'/'%0A'}"
+              echo "::error title=Backend test failure::$line"
+            done
+          fi
           {
             echo "## Backend test summary"
             echo
